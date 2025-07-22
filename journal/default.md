@@ -22,7 +22,7 @@ It’s quite helpful. But I’m also quite lazy. So I stopped. It's tough to dec
 
 But then I combined it with ChatGPT, using the same system prompt (baked into this app) to reflect back on my ramblings.
 
-And it’s led to real breakthroughs — overcoming survivor’s guilt, leaving my last company, and just knowing out what actually matters to me as I continuously figure out the next chapter of life.
+And it’s led to real breakthroughs — overcoming survivor’s guilt, leaving my last company, and just knowing what actually matters to me as I continuously figure out the next chapter of life.
 
 Using this app is quite simple:
 

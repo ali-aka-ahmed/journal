@@ -3332,7 +3332,7 @@ struct ContentView: View {
             // Combine original entries with current reflection content
             let combinedContent = originalEntries + "\n\n=== PREVIOUS REFLECTION AND NEW THOUGHTS ===\n\n" + reflectionContent
             
-            streamOpenAIResponse(apiKey: apiKey, weeklyContent: combinedContent)
+            streamOpenAIResponse(apiKey: apiKey, entryText: combinedContent)
         }
 
         private func streamOpenAIResponse(apiKey: String, entryText: String) {
