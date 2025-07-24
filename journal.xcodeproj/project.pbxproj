@@ -398,7 +398,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Journal;
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "hi :) when clicking the mic button, i'll transcribe your speech to your journal.\n\t\n\tnothing is saved or sent anywhere except to your journal.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "hi :) this allows you to talk to your journal!\n\t\n\tnothing is saved or sent anywhere except locally.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
@@ -439,7 +439,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Journal;
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "hi :) when clicking the mic button, i'll transcribe your speech to your journal.\n\t\n\tnothing is saved or sent anywhere except to your journal.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "hi :) this allows you to talk to your journal!\n\t\n\tnothing is saved or sent anywhere except locally.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;

@@ -51,7 +51,7 @@ struct HumanEntry: Identifiable {
 enum SettingsTab: String, CaseIterable {
     case reflections = "Reflection"
     case apiKeys = "API Keys"
-    case transcription = "Transcription"
+    // case transcription = "Transcription"
 }
 
 enum ReflectionTimeframe {
@@ -166,16 +166,37 @@ class KeychainHelper {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: type.rawValue,
+            kSecAttrSynchronizable as String: false
+        ]
+        
+        let attributes: [String: Any] = [
             kSecValueData as String: data
         ]
         
-        // Delete any existing item
-        SecItemDelete(query as CFDictionary)
+        // Try to update existing item first
+        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
         
-        // Add new item
-        let status = SecItemAdd(query as CFDictionary, nil)
-        if status != errSecSuccess {
-            print("Failed to save API key to Keychain for account \(type.rawValue): \(status)")
+        if updateStatus == errSecItemNotFound {
+            // Item doesn't exist, create new one
+            let addQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: type.rawValue,
+                kSecValueData as String: data,
+                kSecAttrSynchronizable as String: false,
+                kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked
+            ]
+            
+            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+            if addStatus != errSecSuccess {
+                print("🔴 Failed to add API key to Keychain for account \(type.rawValue): \(addStatus)")
+            } else {
+                print("✅ Successfully added API key to Keychain for account \(type.rawValue)")
+            }
+        } else if updateStatus == errSecSuccess {
+            print("✅ Successfully updated API key in Keychain for account \(type.rawValue)")
+        } else {
+            print("🔴 Failed to update API key in Keychain for account \(type.rawValue): \(updateStatus)")
         }
     }
     
@@ -184,6 +205,7 @@ class KeychainHelper {
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: type.rawValue,
+            kSecAttrSynchronizable as String: false,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
@@ -191,23 +213,58 @@ class KeychainHelper {
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         
+        print("🔍 KeychainHelper.loadAPIKey: status = \(status) for account \(type.rawValue)")
+        
         if status == errSecSuccess,
            let data = result as? Data,
            let key = String(data: data, encoding: .utf8) {
+            print("🔍 Successfully loaded API key from keychain: '\(key)'")
             return key
+        } else if status == errSecItemNotFound {
+            print("🔍 API key not found in keychain")
+        } else {
+            print("🔍 Failed to load API key from keychain: \(status)")
         }
         
         return nil
     }
     
+    func isKeychainAccessDenied(for type: KeyType) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: type.rawValue,
+            kSecAttrSynchronizable as String: false,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        
+        // Check for user cancellation (keychain access denied)
+        return status == -128 // errSecUserCancel
+    }
+    
+    
     func deleteAPIKey(for type: KeyType) {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: type.rawValue
+            kSecAttrAccount as String: type.rawValue,
+            kSecAttrSynchronizable as String: false
         ]
         
-        SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        print("🗑️ KeychainHelper.deleteAPIKey: status = \(status) for account \(type.rawValue)")
+        
+        if status == errSecSuccess {
+            print("🗑️ Successfully deleted API key from keychain")
+        } else if status == errSecItemNotFound {
+            print("🗑️ API key not found in keychain (already deleted)")
+        } else {
+            print("🗑️ Failed to delete API key from keychain: \(status)")
+        }
     }
 }
 
@@ -374,16 +431,27 @@ struct ContentView: View {
         let savedScheme = UserDefaults.standard.string(forKey: "colorScheme") ?? "light"
         _colorScheme = State(initialValue: savedScheme == "dark" ? .dark : .light)
         
-        // Load saved OpenAI API key from Keychain (secure storage)
-        let savedAPIKey = KeychainHelper.shared.loadAPIKey(for: .openAI) ?? ""
-        _openAIAPIKey = State(initialValue: savedAPIKey)
-        
-        // Load saved Deepgram API key from Keychain (secure storage)
-        let savedDeepgramKey = KeychainHelper.shared.loadAPIKey(for: .deepgram) ?? ""
-        _deepgramAPIKey = State(initialValue: savedDeepgramKey)
+        // Initialize API keys as empty - will be loaded lazily when needed
+        _openAIAPIKey = State(initialValue: "")
+        _deepgramAPIKey = State(initialValue: "")
         
         // Load saved show microphone preference from settings JSON
         _showMicrophone = State(initialValue: false) // Will be updated from settings in onAppear
+    }
+    
+    // MARK: - Lazy Keychain Loading Functions
+    
+    /// Loads OpenAI API key directly from keychain for reflection functionality
+    private func getOpenAIKeyFromKeychain() -> String? {
+        return KeychainHelper.shared.loadAPIKey(for: .openAI)
+    }
+    
+    /// Loads Deepgram API key from keychain when needed for microphone functionality  
+    private func loadDeepgramKeyIfNeeded() -> Bool {
+        if deepgramAPIKey.isEmpty {
+            deepgramAPIKey = KeychainHelper.shared.loadAPIKey(for: .deepgram) ?? ""
+        }
+        return !deepgramAPIKey.isEmpty
     }
     
     private func buildFullConversationContext() -> String {
@@ -458,6 +526,16 @@ struct ContentView: View {
     
     // Function to run date range reflection (replaces runWeeklyReflection)
     private func runDateRangeReflection(fromDate: Date, toDate: Date, type: String) {
+        // Load OpenAI API key from keychain when user clicks reflect
+        guard let apiKey = getOpenAIKeyFromKeychain(), !apiKey.isEmpty else {
+            showToast(message: "OpenAI API key not configured in Settings", type: .error)
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showingSettings = true
+                selectedSettingsTab = .apiKeys
+            }
+            return
+        }
+        
         // Gather entries from the specified date range
         let rangeContent = gatherEntriesInDateRange(from: fromDate, to: toDate)
         
@@ -516,7 +594,7 @@ struct ContentView: View {
         isStreamingReflection = true
         
         // Start reflection with the gathered content
-        reflectionViewModel.start(apiKey: openAIAPIKey, entryText: rangeContent) {
+        reflectionViewModel.start(apiKey: apiKey, entryText: rangeContent) {
             // On complete: add new empty USER section, unfreeze editor, and save
             self.sections.append(EntrySection(type: .user, text: "\n\n"))
             self.editingText = "\n\n"
@@ -1423,8 +1501,9 @@ struct ContentView: View {
                             }
                             
                             Button(action: {
-                                // Check if OpenAI API key is missing first
-                                if openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                // Load OpenAI API key from keychain when user clicks reflect
+                                guard let apiKey = getOpenAIKeyFromKeychain(), !apiKey.isEmpty else {
+                                    showToast(message: "OpenAI API key not configured in Settings", type: .error)
                                     withAnimation(.easeInOut(duration: 0.2)) {
                                         showingSettings = true
                                         selectedSettingsTab = .apiKeys
@@ -1462,7 +1541,7 @@ struct ContentView: View {
                                     
                                     // Start reflection followup with full context
                                     reflectionViewModel.startReflectionFollowup(
-                                        apiKey: openAIAPIKey,
+                                        apiKey: apiKey,
                                         originalEntries: originalEntries,
                                         reflectionContent: currentReflectionContent,
                                         onComplete: {
@@ -1499,7 +1578,7 @@ struct ContentView: View {
                                     let fullContext = buildFullConversationContext()
                                     
                                     // Start reflection with streaming to file
-                                    reflectionViewModel.start(apiKey: openAIAPIKey, entryText: fullContext) {
+                                    reflectionViewModel.start(apiKey: apiKey, entryText: fullContext) {
                                         // On complete: add new empty USER section, unfreeze editor, and save
                                         sections.append(EntrySection(type: .user, text: "\n\n"))
                                         editingText = "\n\n"
@@ -1853,7 +1932,7 @@ struct ContentView: View {
                     SettingsModal(
                         showingSettings: $showingSettings,
                         selectedSettingsTab: $selectedSettingsTab,
-                        openAIapiKey: $openAIAPIKey,
+                        openAIAPIKey: $openAIAPIKey,
                         deepgramApiKey: $deepgramAPIKey,
                         showMicrophone: $showMicrophone,
                         settingsManager: settingsManager,
@@ -2807,9 +2886,13 @@ struct ContentView: View {
     }
     
     func startRecording() {
-        // Check API key first
-        guard !deepgramAPIKey.isEmpty else {
-            showToast(message: "DeepGram API key not configured in Settings", type: .error)
+        // Load Deepgram API key from keychain when user clicks microphone
+        guard loadDeepgramKeyIfNeeded() else {
+            showToast(message: "Deepgram API key not configured in Settings", type: .error)
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showingSettings = true
+                selectedSettingsTab = .apiKeys
+            }
             return
         }
         
@@ -2942,8 +3025,8 @@ struct ContentView: View {
     }
     
     func transcribeAudioChunk(url: URL, chunkIndex: Int) {
-        guard !deepgramAPIKey.isEmpty else {
-            showToast(message: "DeepGram API key not configured", type: .error)
+        guard loadDeepgramKeyIfNeeded() else {
+            showToast(message: "Deepgram API key not configured", type: .error)
             return
         }
         
@@ -3017,8 +3100,8 @@ struct ContentView: View {
     }
     
     func transcribeAudio(url: URL) {
-        guard !deepgramAPIKey.isEmpty else {
-            showToast(message: "DeepGram API key not configured", type: .error)
+        guard loadDeepgramKeyIfNeeded() else {
+            showToast(message: "Deepgram API key not configured", type: .error)
             return
         }
         
@@ -3136,9 +3219,13 @@ struct ContentView: View {
     
     // MARK: - Live Transcription Functions
     func startLiveTranscription() {
-        // Check API key first
-        guard !deepgramAPIKey.isEmpty else {
+        // Load Deepgram API key from keychain when user clicks microphone
+        guard loadDeepgramKeyIfNeeded() else {
             showToast(message: "Deepgram API key not configured in Settings", type: .error)
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showingSettings = true
+                selectedSettingsTab = .apiKeys
+            }
             return
         }
         
@@ -3830,7 +3917,7 @@ struct SettingsModal: View {
     @Environment(\.colorScheme) var colorScheme
     @Binding var showingSettings: Bool
     @Binding var selectedSettingsTab: SettingsTab
-    @Binding var openAIapiKey: String
+    @Binding var openAIAPIKey: String
     @Binding var deepgramApiKey: String
     @Binding var showMicrophone: Bool
     @ObservedObject var settingsManager: SettingsManager
@@ -3841,7 +3928,7 @@ struct SettingsModal: View {
             SettingsSidebar(selectedTab: $selectedSettingsTab)
             SettingsContent(
                 selectedTab: selectedSettingsTab,
-                openAIapiKey: $openAIapiKey,
+                openAIAPIKey: $openAIAPIKey,
                 deepgramApiKey: $deepgramApiKey,
                 showMicrophone: $showMicrophone,
                 settingsManager: settingsManager,
@@ -3888,12 +3975,12 @@ struct SettingsSidebar: View {
                     action: { selectedTab = .apiKeys }
                 )
                 
-                SettingsSidebarItem(
-                    title: "Transcription",
-                    icon: "waveform",
-                    isSelected: selectedTab == .transcription,
-                    action: { selectedTab = .transcription }
-                )
+                // SettingsSidebarItem(
+                //     title: "Transcription",
+                //     icon: "waveform",
+                //     isSelected: selectedTab == .transcription,
+                //     action: { selectedTab = .transcription }
+                // )
             }
             .padding(.horizontal, 8)
             
@@ -3937,7 +4024,7 @@ struct SettingsSidebarItem: View {
 
 struct SettingsContent: View {
     let selectedTab: SettingsTab
-    @Binding var openAIapiKey: String
+    @Binding var openAIAPIKey: String
     @Binding var deepgramApiKey: String
     @Binding var showMicrophone: Bool
     @ObservedObject var settingsManager: SettingsManager
@@ -3956,9 +4043,9 @@ struct SettingsContent: View {
                     onRunCustom: { fromDate, toDate in runDateRangeReflection(fromDate, toDate, "Custom") }
                 )
             case .apiKeys:
-                APIKeysSettingsView(openAIapiKey: $openAIapiKey)
-            case .transcription:
-                TranscriptionSettingsView(showMicrophone: $showMicrophone, deepgramApiKey: $deepgramApiKey, settingsManager: settingsManager)
+                APIKeysSettingsView(openAIAPIKey: $openAIAPIKey)
+            // case .transcription:
+            //     TranscriptionSettingsView(showMicrophone: $showMicrophone, deepgramApiKey: $deepgramApiKey, settingsManager: settingsManager)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -3968,11 +4055,58 @@ struct SettingsContent: View {
 
 struct APIKeysSettingsView: View {
     @Environment(\.colorScheme) var colorScheme
-    @Binding var openAIapiKey: String
+    @Binding var openAIAPIKey: String
     
     @State private var tempOpenAIApiKey: String = ""
     @State private var hasUnsavedOpenAI: Bool = false
     @State private var showOpenAISaveConfirmation: Bool = false
+    @State private var isEditingMode: Bool = false
+    @State private var keychainAccessDenied: Bool = false
+    
+    private func enterEditMode() {
+        // Check if keychain access is denied first
+        if KeychainHelper.shared.isKeychainAccessDenied(for: .openAI) {
+            print("🔒 enterEditMode: keychain access denied - staying in non-edit mode")
+            keychainAccessDenied = true
+            return
+        }
+        
+        // Load current saved API key from keychain when user clicks Edit
+        let savedKey = KeychainHelper.shared.loadAPIKey(for: .openAI) ?? ""
+        print("🔓 enterEditMode: loaded from keychain = '\(savedKey)'")
+        tempOpenAIApiKey = savedKey
+        openAIAPIKey = savedKey  // Update the main state as well
+        print("🔓 Set tempOpenAIApiKey to: '\(tempOpenAIApiKey)'")
+        print("🔓 Set openAIAPIKey to: '\(openAIAPIKey)'")
+        isEditingMode = true
+        hasUnsavedOpenAI = false
+        keychainAccessDenied = false
+    }
+    
+    private func saveAndExitEditMode() {
+        // Save the API key to keychain
+        print("🔐 saveAndExitEditMode: tempOpenAIApiKey = '\(tempOpenAIApiKey)'")
+        if !tempOpenAIApiKey.isEmpty {
+            print("🔐 Saving to keychain: '\(tempOpenAIApiKey)'")
+            KeychainHelper.shared.saveAPIKey(tempOpenAIApiKey, for: .openAI)
+            openAIAPIKey = tempOpenAIApiKey
+            print("🔐 Updated openAIAPIKey to: '\(openAIAPIKey)'")
+        } else {
+            print("🔐 Deleting from keychain (empty key)")
+            KeychainHelper.shared.deleteAPIKey(for: .openAI)
+            openAIAPIKey = ""
+        }
+        
+        // Exit edit mode and show confirmation
+        isEditingMode = false
+        hasUnsavedOpenAI = false
+        showOpenAISaveConfirmation = true
+        tempOpenAIApiKey = "" // Clear the temp field
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            showOpenAISaveConfirmation = false
+        }
+    }
     
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
@@ -3982,17 +4116,25 @@ struct APIKeysSettingsView: View {
                     .font(.system(size: 14, weight: .medium))
                     .foregroundColor(.primary)
                 
-                SecureField("Enter your OpenAI API key", text: $tempOpenAIApiKey)
+                SecureField(isEditingMode ? "Enter your OpenAI API key" : "••••••••••••••••••••", text: $tempOpenAIApiKey)
                     .textFieldStyle(PlainTextFieldStyle())
                     .font(.system(size: 13, design: .monospaced))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
                     .background(
                         RoundedRectangle(cornerRadius: 5)
-                            .stroke(Color.gray.opacity(0.5), lineWidth: 1)
+                            .stroke(Color.gray.opacity(isEditingMode ? 0.5 : 0.3), lineWidth: 1)
+                            .background(
+                                RoundedRectangle(cornerRadius: 5)
+                                    .fill(isEditingMode ? Color.clear : Color.gray.opacity(0.1))
+                            )
                     )
+                    .foregroundColor(isEditingMode ? .primary : .secondary)
+                    .disabled(!isEditingMode)
                     .onChange(of: tempOpenAIApiKey) { newValue in
-                        hasUnsavedOpenAI = (newValue != openAIapiKey)
+                        if isEditingMode {
+                            hasUnsavedOpenAI = (newValue != openAIAPIKey)
+                        }
                     }
                 
                 HStack(spacing: 2) {
@@ -4007,31 +4149,23 @@ struct APIKeysSettingsView: View {
                 
                 HStack(spacing: 12) {
                     Button(action: {
-                        if !tempOpenAIApiKey.isEmpty {
-                            KeychainHelper.shared.saveAPIKey(tempOpenAIApiKey, for: .openAI)
-                            openAIapiKey = tempOpenAIApiKey
+                        if isEditingMode {
+                            saveAndExitEditMode()
                         } else {
-                            KeychainHelper.shared.deleteAPIKey(for: .openAI)
-                            openAIapiKey = ""
-                        }
-                        hasUnsavedOpenAI = false
-                        showOpenAISaveConfirmation = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                            showOpenAISaveConfirmation = false
+                            enterEditMode()
                         }
                     }) {
-                        Text("Save")
+                        Text(isEditingMode ? "Save" : "Edit")
                             .font(.system(size: 13, weight: .medium))
                             .foregroundColor(.white)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 8)
                             .background(
                                 RoundedRectangle(cornerRadius: 6)
-                                    .fill(colorScheme == .dark ? Color.black : (hasUnsavedOpenAI ? .primary : .secondary))
+                                    .fill(colorScheme == .dark ? Color.black : .primary)
                             )
                     }
                     .buttonStyle(PlainButtonStyle())
-                    .disabled(!hasUnsavedOpenAI)
                     
                     if showOpenAISaveConfirmation {
                         HStack(spacing: 6) {
@@ -4051,8 +4185,10 @@ struct APIKeysSettingsView: View {
         }
         .padding(.top, 8)
         .onAppear {
-            tempOpenAIApiKey = openAIapiKey
+            // Don't load from keychain on appear - show empty/greyed out field
+            tempOpenAIApiKey = ""
             hasUnsavedOpenAI = false
+            isEditingMode = false
         }
     }
 }
@@ -4395,7 +4531,10 @@ struct TranscriptionSettingsView: View {
         }
         .padding(.top, 8)
         .onAppear {
-            tempDeepgramApiKey = deepgramApiKey
+            // Load current saved API key from keychain to display in settings
+            let savedKey = KeychainHelper.shared.loadAPIKey(for: .deepgram) ?? ""
+            tempDeepgramApiKey = savedKey
+            deepgramApiKey = savedKey  // Update the main state as well
             hasUnsavedDeepgram = false
         }
     }
