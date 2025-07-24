@@ -51,7 +51,7 @@ struct HumanEntry: Identifiable {
 enum SettingsTab: String, CaseIterable {
     case reflections = "Reflection"
     case apiKeys = "API Keys"
-    // case transcription = "Transcription"
+    case transcription = "Voice Mode"
 }
 
 enum ReflectionTimeframe {
@@ -73,7 +73,7 @@ struct TranscriptionSettings: Codable {
     var showMicrophone: Bool
     
     static let `default` = TranscriptionSettings(
-        showMicrophone: false
+        showMicrophone: true
     )
 }
 
@@ -157,6 +157,7 @@ class KeychainHelper {
     enum KeyType: String {
         case openAI = "openai_api_key"
         case deepgram = "deepgram_api_key"
+        case hume = "hume_api_key"
     }
     
     func saveAPIKey(_ key: String, for type: KeyType) {
@@ -342,7 +343,7 @@ struct ContentView: View {
     @State private var isHoveringSettings = false // Add state for settings hover
     @State private var selectedSettingsTab: SettingsTab = .reflections // Add state for selected tab
     @State private var openAIAPIKey: String = ""
-    @State private var deepgramAPIKey: String = ""
+    @State private var humeAPIKey: String = ""
     @StateObject private var reflectionViewModel = ReflectionViewModel()
     @State private var followUpText: String = ""
     @StateObject private var settingsManager = SettingsManager()
@@ -433,10 +434,9 @@ struct ContentView: View {
         
         // Initialize API keys as empty - will be loaded lazily when needed
         _openAIAPIKey = State(initialValue: "")
-        _deepgramAPIKey = State(initialValue: "")
         
         // Load saved show microphone preference from settings JSON
-        _showMicrophone = State(initialValue: false) // Will be updated from settings in onAppear
+        _showMicrophone = State(initialValue: true) // Will be updated from settings in onAppear
     }
     
     // MARK: - Lazy Keychain Loading Functions
@@ -446,13 +446,6 @@ struct ContentView: View {
         return KeychainHelper.shared.loadAPIKey(for: .openAI)
     }
     
-    /// Loads Deepgram API key from keychain when needed for microphone functionality  
-    private func loadDeepgramKeyIfNeeded() -> Bool {
-        if deepgramAPIKey.isEmpty {
-            deepgramAPIKey = KeychainHelper.shared.loadAPIKey(for: .deepgram) ?? ""
-        }
-        return !deepgramAPIKey.isEmpty
-    }
     
     private func buildFullConversationContext() -> String {
         var context = ""
@@ -1933,7 +1926,7 @@ struct ContentView: View {
                         showingSettings: $showingSettings,
                         selectedSettingsTab: $selectedSettingsTab,
                         openAIAPIKey: $openAIAPIKey,
-                        deepgramApiKey: $deepgramAPIKey,
+                        humeAPIKey: $humeAPIKey,
                         showMicrophone: $showMicrophone,
                         settingsManager: settingsManager,
                         runDateRangeReflection: runDateRangeReflection
@@ -2887,14 +2880,6 @@ struct ContentView: View {
     
     func startRecording() {
         // Load Deepgram API key from keychain when user clicks microphone
-        guard loadDeepgramKeyIfNeeded() else {
-            showToast(message: "Deepgram API key not configured in Settings", type: .error)
-            withAnimation(.easeInOut(duration: 0.2)) {
-                showingSettings = true
-                selectedSettingsTab = .apiKeys
-            }
-            return
-        }
         
         // Debug: Print the current authorization status
         let status = AVCaptureDevice.authorizationStatus(for: .audio)
@@ -3025,10 +3010,6 @@ struct ContentView: View {
     }
     
     func transcribeAudioChunk(url: URL, chunkIndex: Int) {
-        guard loadDeepgramKeyIfNeeded() else {
-            showToast(message: "Deepgram API key not configured", type: .error)
-            return
-        }
         
         // Check if the audio file has content (avoid transcribing empty chunks)
         guard let audioData = try? Data(contentsOf: url), audioData.count > 1000 else {
@@ -3038,7 +3019,7 @@ struct ContentView: View {
         }
         
         // Prepare request to DeepGram API
-        let apiKey = deepgramAPIKey
+        let apiKey = "API_KEY_DEEPGRAM"
         let endpoint = URL(string: "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true")!
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
@@ -3100,15 +3081,11 @@ struct ContentView: View {
     }
     
     func transcribeAudio(url: URL) {
-        guard loadDeepgramKeyIfNeeded() else {
-            showToast(message: "Deepgram API key not configured", type: .error)
-            return
-        }
         
         isTranscribing = true
         
         // Prepare request to DeepGram API
-        let apiKey = deepgramAPIKey
+        let apiKey = "API_KEY_DEEPGRAM"
         let endpoint = URL(string: "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true")!
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
@@ -3220,14 +3197,6 @@ struct ContentView: View {
     // MARK: - Live Transcription Functions
     func startLiveTranscription() {
         // Load Deepgram API key from keychain when user clicks microphone
-        guard loadDeepgramKeyIfNeeded() else {
-            showToast(message: "Deepgram API key not configured in Settings", type: .error)
-            withAnimation(.easeInOut(duration: 0.2)) {
-                showingSettings = true
-                selectedSettingsTab = .apiKeys
-            }
-            return
-        }
         
         // Check microphone permission
         let status = AVCaptureDevice.authorizationStatus(for: .audio)
@@ -3271,7 +3240,7 @@ struct ContentView: View {
         startMicAnimation()
         
                  // Connect to Deepgram live API
-         liveTranscription.connect(apiKey: deepgramAPIKey, onTranscriptUpdate: { transcript, isFinal in
+         liveTranscription.connect(apiKey: "API_KEY_DEEPGRAM", onTranscriptUpdate: { transcript, isFinal in
              DispatchQueue.main.async {
                  self.handleLiveTranscript(transcript, isFinal: isFinal)
              }
@@ -3918,7 +3887,7 @@ struct SettingsModal: View {
     @Binding var showingSettings: Bool
     @Binding var selectedSettingsTab: SettingsTab
     @Binding var openAIAPIKey: String
-    @Binding var deepgramApiKey: String
+    @Binding var humeAPIKey: String
     @Binding var showMicrophone: Bool
     @ObservedObject var settingsManager: SettingsManager
     let runDateRangeReflection: (Date, Date, String) -> Void
@@ -3929,7 +3898,7 @@ struct SettingsModal: View {
             SettingsContent(
                 selectedTab: selectedSettingsTab,
                 openAIAPIKey: $openAIAPIKey,
-                deepgramApiKey: $deepgramApiKey,
+                humeAPIKey: $humeAPIKey,
                 showMicrophone: $showMicrophone,
                 settingsManager: settingsManager,
                 runDateRangeReflection: runDateRangeReflection
@@ -3975,12 +3944,12 @@ struct SettingsSidebar: View {
                     action: { selectedTab = .apiKeys }
                 )
                 
-                // SettingsSidebarItem(
-                //     title: "Transcription",
-                //     icon: "waveform",
-                //     isSelected: selectedTab == .transcription,
-                //     action: { selectedTab = .transcription }
-                // )
+                SettingsSidebarItem(
+                    title: "Voice Mode",
+                    icon: "waveform",
+                    isSelected: selectedTab == .transcription,
+                    action: { selectedTab = .transcription }
+                )
             }
             .padding(.horizontal, 8)
             
@@ -4025,7 +3994,7 @@ struct SettingsSidebarItem: View {
 struct SettingsContent: View {
     let selectedTab: SettingsTab
     @Binding var openAIAPIKey: String
-    @Binding var deepgramApiKey: String
+    @Binding var humeAPIKey: String
     @Binding var showMicrophone: Bool
     @ObservedObject var settingsManager: SettingsManager
     let runDateRangeReflection: (Date, Date, String) -> Void
@@ -4043,9 +4012,9 @@ struct SettingsContent: View {
                     onRunCustom: { fromDate, toDate in runDateRangeReflection(fromDate, toDate, "Custom") }
                 )
             case .apiKeys:
-                APIKeysSettingsView(openAIAPIKey: $openAIAPIKey)
-            // case .transcription:
-            //     TranscriptionSettingsView(showMicrophone: $showMicrophone, deepgramApiKey: $deepgramApiKey, settingsManager: settingsManager)
+                APIKeysSettingsView(openAIAPIKey: $openAIAPIKey, humeAPIKey: $humeAPIKey)
+            case .transcription:
+                TranscriptionSettingsView(showMicrophone: $showMicrophone, settingsManager: settingsManager)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -4056,12 +4025,19 @@ struct SettingsContent: View {
 struct APIKeysSettingsView: View {
     @Environment(\.colorScheme) var colorScheme
     @Binding var openAIAPIKey: String
+    @Binding var humeAPIKey: String
     
     @State private var tempOpenAIApiKey: String = ""
     @State private var hasUnsavedOpenAI: Bool = false
     @State private var showOpenAISaveConfirmation: Bool = false
     @State private var isEditingMode: Bool = false
     @State private var keychainAccessDenied: Bool = false
+    
+    @State private var tempHumeApiKey: String = ""
+    @State private var hasUnsavedHume: Bool = false
+    @State private var showHumeSaveConfirmation: Bool = false
+    @State private var isEditingHumeMode: Bool = false
+    @State private var humeKeychainAccessDenied: Bool = false
     
     private func enterEditMode() {
         // Check if keychain access is denied first
@@ -4105,6 +4081,51 @@ struct APIKeysSettingsView: View {
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             showOpenAISaveConfirmation = false
+        }
+    }
+    
+    private func enterHumeEditMode() {
+        // Check if keychain access is denied first
+        if KeychainHelper.shared.isKeychainAccessDenied(for: .hume) {
+            print("🔒 enterHumeEditMode: keychain access denied - staying in non-edit mode")
+            humeKeychainAccessDenied = true
+            return
+        }
+        
+        // Load current saved API key from keychain when user clicks Edit
+        let savedKey = KeychainHelper.shared.loadAPIKey(for: .hume) ?? ""
+        print("🔓 enterHumeEditMode: loaded from keychain = '\(savedKey)'")
+        tempHumeApiKey = savedKey
+        humeAPIKey = savedKey  // Update the main state as well
+        print("🔓 Set tempHumeApiKey to: '\(tempHumeApiKey)'")
+        print("🔓 Set humeAPIKey to: '\(humeAPIKey)'")
+        isEditingHumeMode = true
+        hasUnsavedHume = false
+        humeKeychainAccessDenied = false
+    }
+    
+    private func saveAndExitHumeEditMode() {
+        // Save the API key to keychain
+        print("🔐 saveAndExitHumeEditMode: tempHumeApiKey = '\(tempHumeApiKey)'")
+        if !tempHumeApiKey.isEmpty {
+            print("🔐 Saving to keychain: '\(tempHumeApiKey)'")
+            KeychainHelper.shared.saveAPIKey(tempHumeApiKey, for: .hume)
+            humeAPIKey = tempHumeApiKey
+            print("🔐 Updated humeAPIKey to: '\(humeAPIKey)'")
+        } else {
+            print("🔐 Deleting from keychain (empty key)")
+            KeychainHelper.shared.deleteAPIKey(for: .hume)
+            humeAPIKey = ""
+        }
+        
+        // Exit edit mode and show confirmation
+        isEditingHumeMode = false
+        hasUnsavedHume = false
+        showHumeSaveConfirmation = true
+        tempHumeApiKey = "" // Clear the temp field
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            showHumeSaveConfirmation = false
         }
     }
     
@@ -4181,6 +4202,79 @@ struct APIKeysSettingsView: View {
                 }
                 .animation(.easeInOut(duration: 0.2), value: showOpenAISaveConfirmation)
             }
+            
+            // Hume API Key Input
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Hume API Key")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(.primary)
+                
+                SecureField(isEditingHumeMode ? "Enter your Hume API key" : "••••••••••••••••••••", text: $tempHumeApiKey)
+                    .textFieldStyle(PlainTextFieldStyle())
+                    .font(.system(size: 13, design: .monospaced))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .stroke(Color.gray.opacity(isEditingHumeMode ? 0.5 : 0.3), lineWidth: 1)
+                            .background(
+                                RoundedRectangle(cornerRadius: 5)
+                                    .fill(isEditingHumeMode ? Color.clear : Color.gray.opacity(0.1))
+                            )
+                    )
+                    .foregroundColor(isEditingHumeMode ? .primary : .secondary)
+                    .disabled(!isEditingHumeMode)
+                    .onChange(of: tempHumeApiKey) { newValue in
+                        if isEditingHumeMode {
+                            hasUnsavedHume = (newValue != humeAPIKey)
+                        }
+                    }
+                
+                HStack(spacing: 2) {
+                    Text("Used for voice mode. Get your key at")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    Link("platform.hume.ai/settings/keys", destination: URL(string: "https://platform.hume.ai/settings/keys")!)
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                }
+                
+                HStack(spacing: 12) {
+                    Button(action: {
+                        if isEditingHumeMode {
+                            saveAndExitHumeEditMode()
+                        } else {
+                            enterHumeEditMode()
+                        }
+                    }) {
+                        Text(isEditingHumeMode ? "Save" : "Edit")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(colorScheme == .dark ? Color.black : .primary)
+                            )
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    
+                    if showHumeSaveConfirmation {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                                .font(.system(size: 12))
+                            Text("Saved")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
+                        .transition(.opacity)
+                    }
+                }
+                .animation(.easeInOut(duration: 0.2), value: showHumeSaveConfirmation)
+            }
+            
             Spacer()
         }
         .padding(.top, 8)
@@ -4189,6 +4283,10 @@ struct APIKeysSettingsView: View {
             tempOpenAIApiKey = ""
             hasUnsavedOpenAI = false
             isEditingMode = false
+            
+            tempHumeApiKey = ""
+            hasUnsavedHume = false
+            isEditingHumeMode = false
         }
     }
 }
@@ -4433,110 +4531,19 @@ struct ReflectionsSettingsView: View {
 
 struct TranscriptionSettingsView: View {
     @Binding var showMicrophone: Bool
-    @Binding var deepgramApiKey: String
     @ObservedObject var settingsManager: SettingsManager
     
-    @State private var tempDeepgramApiKey: String = ""
-    @State private var hasUnsavedDeepgram: Bool = false
-    @State private var showDeepgramSaveConfirmation: Bool = false
-    @Environment(\.colorScheme) var colorScheme
-
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
 
-            Toggle("Show microphone button", isOn: $showMicrophone)
+            Toggle("Show Voice Mode", isOn: $showMicrophone)
                 .onChange(of: showMicrophone) { newValue in
                     settingsManager.updateShowMicrophone(newValue)
                 }
 
-            Text("Disable if you prefer using another speech-to-text app (Wispr Flow, Superwhisper, etc).")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            // Deepgram API Key Input - only show if microphone is enabled
-            if showMicrophone {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Deepgram API Key")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.primary)
-                    
-                    SecureField("Enter your Deepgram API key", text: $tempDeepgramApiKey)
-                        .textFieldStyle(PlainTextFieldStyle())
-                        .font(.system(size: 13, design: .monospaced))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5)
-                                .stroke(Color.gray.opacity(0.5), lineWidth: 1)
-                        )
-                        .onChange(of: tempDeepgramApiKey) { newValue in
-                            hasUnsavedDeepgram = (newValue != deepgramApiKey)
-                        }
-                    
-                    HStack(spacing: 2) {
-                        Text("Used for speech-to-text transcription. Get your key at")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    
-                        Link("console.deepgram.com", destination: URL(string: "https://console.deepgram.com")!)
-                            .font(.caption)
-                            .foregroundColor(.blue)
-                    }
-                    
-                    HStack(spacing: 12) {
-                        Button(action: {
-                            if !tempDeepgramApiKey.isEmpty {
-                                KeychainHelper.shared.saveAPIKey(tempDeepgramApiKey, for: .deepgram)
-                                deepgramApiKey = tempDeepgramApiKey
-                            } else {
-                                KeychainHelper.shared.deleteAPIKey(for: .deepgram)
-                                deepgramApiKey = ""
-                            }
-                            hasUnsavedDeepgram = false
-                            showDeepgramSaveConfirmation = true
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                                showDeepgramSaveConfirmation = false
-                            }
-                        }) {
-                            Text("Save")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .fill(colorScheme == .dark ? Color.black : (hasUnsavedDeepgram ? .primary : .secondary))
-                                )
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                        .disabled(!hasUnsavedDeepgram)
-                        
-                        if showDeepgramSaveConfirmation {
-                            HStack(spacing: 6) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(.green)
-                                    .font(.system(size: 12))
-                                Text("Saved")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
-                            }
-                            .transition(.opacity)
-                        }
-                    }
-                    .animation(.easeInOut(duration: 0.2), value: showDeepgramSaveConfirmation)
-                }
-            }
-
             Spacer()
         }
         .padding(.top, 8)
-        .onAppear {
-            // Load current saved API key from keychain to display in settings
-            let savedKey = KeychainHelper.shared.loadAPIKey(for: .deepgram) ?? ""
-            tempDeepgramApiKey = savedKey
-            deepgramApiKey = savedKey  // Update the main state as well
-            hasUnsavedDeepgram = false
-        }
     }
 }
 
