@@ -51,7 +51,7 @@ struct HumanEntry: Identifiable {
 enum SettingsTab: String, CaseIterable {
     case reflections = "Reflection"
     case apiKeys = "API Keys"
-    case transcription = "Voice Mode"
+    case transcription = "Voice"
 }
 
 enum ReflectionTimeframe {
@@ -70,11 +70,8 @@ struct AppSettings: Codable {
 
 
 struct TranscriptionSettings: Codable {
-    var showMicrophone: Bool
-    
-    static let `default` = TranscriptionSettings(
-        showMicrophone: true
-    )
+    // Remove transcription settings
+    static let `default` = TranscriptionSettings()
 }
 
 // Settings manager for JSON persistence
@@ -134,10 +131,6 @@ class SettingsManager: ObservableObject {
         }
     }
     
-    func updateShowMicrophone(_ show: Bool) {
-        settings.transcription.showMicrophone = show
-        saveSettings()
-    }
 }
 
 struct HeartEmoji: Identifiable {
@@ -156,8 +149,6 @@ class KeychainHelper {
     
     enum KeyType: String {
         case openAI = "openai_api_key"
-        case deepgram = "deepgram_api_key"
-        case hume = "hume_api_key"
     }
     
     func saveAPIKey(_ key: String, for type: KeyType) {
@@ -343,11 +334,9 @@ struct ContentView: View {
     @State private var isHoveringSettings = false // Add state for settings hover
     @State private var selectedSettingsTab: SettingsTab = .reflections // Add state for selected tab
     @State private var openAIAPIKey: String = ""
-    @State private var humeAPIKey: String = ""
     @StateObject private var reflectionViewModel = ReflectionViewModel()
     @State private var followUpText: String = ""
     @StateObject private var settingsManager = SettingsManager()
-    @State private var showMicrophone: Bool = false
     @State private var isNavbarHidden: Bool = false
     
     // Add state for reflection functionality
@@ -365,24 +354,7 @@ struct ContentView: View {
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     let entryHeight: CGFloat = 40
     
-    // Updated audio recording states for streaming
-    @State private var isListening = false
-    @State private var micDotAngle: Double = 0
-    @State private var micDotTimer: Timer? = nil
-    @State private var audioRecorder: AVAudioRecorder? = nil
-    @State private var isRecording = false
-    @State private var isTranscribing = false
-    @State private var transcriptionError: String? = nil
-    @State private var chunkTimer: Timer? = nil
-    @State private var chunkCounter: Int = 0
-    @State private var isVoiceInputMode = false // New state for voice input mode
-    @State private var pendingTranscriptionText = "" // Buffer for incoming transcription
     
-    // Live transcription with Deepgram WebSocket
-    @StateObject private var liveTranscription = DeepgramLiveTranscription()
-    @State private var isLiveTranscribing = false
-    @State private var liveFinalText = ""
-    @State private var liveInterimText = ""
     
     // Toast notification states
     @State private var showToast = false
@@ -435,8 +407,6 @@ struct ContentView: View {
         // Initialize API keys as empty - will be loaded lazily when needed
         _openAIAPIKey = State(initialValue: "")
         
-        // Load saved show microphone preference from settings JSON
-        _showMicrophone = State(initialValue: true) // Will be updated from settings in onAppear
     }
     
     // MARK: - Lazy Keychain Loading Functions
@@ -751,10 +721,10 @@ struct ContentView: View {
                                 // Overlap exists if: reflectionStart <= targetEnd AND reflectionEnd >= targetStart
                                 if startOfReflectionStart <= startOfEndDate && startOfReflectionEnd >= startOfStartDate {
                                     shouldInclude = true
-                                    dateFormatter.dateFormat = "MMMM d"
+                                    dateFormatter.dateFormat = "MMM d"
                                     let startDisplay = dateFormatter.string(from: reflectionStartDate)
                                     let endDisplay = dateFormatter.string(from: reflectionEndDate)
-                                    displayDate = "Reflection (\(timeframeType)): \(startDisplay) - \(endDisplay)"
+                                    displayDate = "\(timeframeType)): \(startDisplay) - \(endDisplay)"
                                 }
                             }
                         }
@@ -1101,17 +1071,18 @@ struct ContentView: View {
                         }
                     }
                 }
-                // Handle Reflection entries: [Reflection]-[MM-dd-yyyy]-[MM-dd-yyyy]-[HH-mm-ss].md
+                // Handle Reflection entries: [Reflection]-[timeframeType]-[MM-dd-yyyy]-[MM-dd-yyyy]-[HH-mm-ss].md
                 else if filename.hasPrefix("[Reflection]-") {
-                    let pattern = "\\[Reflection\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\]"
+                    let pattern = "\\[Reflection\\]-\\[([^\\]]+)\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\]"
                     if let match = filename.range(of: pattern, options: .regularExpression) {
                         let matchString = String(filename[match])
                         let components = matchString.components(separatedBy: "]-[")
                         
-                        if components.count >= 4 {
-                            let startDateString = components[1]
-                            let endDateString = components[2]
-                            let timeString = components[3].replacingOccurrences(of: "]", with: "")
+                        if components.count >= 5 {
+                            let timeframeType = components[1]
+                            let startDateString = components[2]
+                            let endDateString = components[3]
+                            let timeString = components[4].replacingOccurrences(of: "]", with: "")
                             
                             let dateFormatter = DateFormatter()
                             dateFormatter.dateFormat = "MM-dd-yyyy"
@@ -1127,7 +1098,7 @@ struct ContentView: View {
                                 dateFormatter.dateFormat = "MMM d"
                                 let startDisplay = dateFormatter.string(from: startDate)
                                 let endDisplay = dateFormatter.string(from: endDate)
-                                displayDate = "Reflection: \(startDisplay) - \(endDisplay)"
+                                displayDate = "\(timeframeType): \(startDisplay) - \(endDisplay)"
                             }
                         }
                     }
@@ -1777,70 +1748,11 @@ struct ContentView: View {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             bottomNavOpacity = 1.0
                         }
-                    } else if timerIsRunning || isRecording {
+                    } else if timerIsRunning {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             bottomNavOpacity = 0.0
                         }
                     }
-                }
-                .onChange(of: isRecording) { _ in
-                    if !isHoveringBottomNav && (timerIsRunning || isRecording) {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            bottomNavOpacity = 0.0
-                        }
-                    } else if !isHoveringBottomNav && !timerIsRunning && !isRecording {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            bottomNavOpacity = 1.0
-                        }
-                    }
-                }
-            }
-            
-            // Microphone Button (centered, outside navbar opacity control)
-            if showMicrophone {
-                let buttonSize: CGFloat = 40
-                let borderWidth: CGFloat = 1
-                let dotRadius: CGFloat = (buttonSize / 2) - (borderWidth / 2)
-                Button(action: {
-                    toggleRecording()
-                }) {
-                    ZStack {
-                        Circle()
-                            .fill(colorScheme == .light ? Color.lightModeBackground : Color.black)
-                            .frame(width: buttonSize, height: buttonSize)
-                            .overlay(
-                                Circle()
-                                    .stroke(Color.gray.opacity(0.45), lineWidth: borderWidth)
-                            )
-                            .shadow(
-                                color: isRecording
-                                    ? (colorScheme == .dark ? Color.clear : Color.clear)
-                                    : (colorScheme == .dark ? Color.white.opacity(0.32) : Color.gray.opacity(0.32)),
-                                radius: 12,
-                                y: 3
-                            )
-                        Image(systemName: "mic.fill")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundColor(colorScheme == .light ? .gray : .white.opacity(0.85))
-                        // Animated white dot on border
-                        if isRecording {
-                            let angle = Angle(degrees: micDotAngle)
-                            let x = dotRadius * cos(angle.radians - .pi/2)
-                            let y = dotRadius * sin(angle.radians - .pi/2)
-                            Circle()
-                                .fill(Color.white)
-                                .frame(width: 5, height: 5)
-                                .offset(x: x, y: y)
-                                .shadow(color: Color.white.opacity(0.8), radius: 3)
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
-                .animation(.linear(duration: 0.016), value: micDotAngle)
-                .padding(.vertical, 10)
-                .onDisappear {
-                    micDotTimer?.invalidate()
-                    micDotTimer = nil
                 }
             }
         }
@@ -1876,11 +1788,8 @@ struct ContentView: View {
             showingSidebar = false  // Hide sidebar by default
             loadExistingEntries()
             
-            // Sync settings from JSON
-            showMicrophone = settingsManager.settings.transcription.showMicrophone
         }
         .onDisappear {
-            cleanupRecording()
         }
         .onChange(of: text) { _ in
             // Save current entry when text changes
@@ -1926,8 +1835,6 @@ struct ContentView: View {
                         showingSettings: $showingSettings,
                         selectedSettingsTab: $selectedSettingsTab,
                         openAIAPIKey: $openAIAPIKey,
-                        humeAPIKey: $humeAPIKey,
-                        showMicrophone: $showMicrophone,
                         settingsManager: settingsManager,
                         runDateRangeReflection: runDateRangeReflection
                     )
@@ -2002,10 +1909,6 @@ struct ContentView: View {
                     .disabled(reflectionViewModel.isLoading || isStreamingReflection)
                     .focused($isUserEditorFocused)
                     .onChange(of: editingText) { _ in
-                        // Auto-scroll to bottom during live transcription
-                        if isLiveTranscribing {
-                            scrollTextEditorToBottom()
-                        }
                     }
                     .overlay(
                         ZStack(alignment: .topLeading) {
@@ -2870,284 +2773,12 @@ struct ContentView: View {
         }
     }
     
-    func toggleRecording() {
-        if isLiveTranscribing {
-            stopLiveTranscription()
-        } else {
-            startLiveTranscription()
-        }
-    }
     
-    func startRecording() {
-        // Load Deepgram API key from keychain when user clicks microphone
-        
-        // Debug: Print the current authorization status
-        let status = AVCaptureDevice.authorizationStatus(for: .audio)
-        
-        // For macOS, directly check microphone permission
-        switch status {
-        case .authorized:
-            setupRecorder()
-        case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .audio) { granted in
-                DispatchQueue.main.async {
-                    if granted {
-                        self.setupRecorder()
-                    } else {
-                        self.showToast(message: "Microphone access denied. Please enable in System Settings.", type: .error)
-                    }
-                }
-            }
-        case .denied:
-            showToast(message: "Microphone access denied. Please enable in System Settings.", type: .error)
-        case .restricted:
-            showToast(message: "Microphone access denied. Please enable in System Settings.", type: .error)
-        @unknown default:
-            showToast(message: "Unknown microphone permission status", type: .error)
-        }
-    }
     
-    func setupRecorder() {
-        // Enter voice input mode - remove cursor focus and prepare for voice input
-        isVoiceInputMode = true
-        
-        
-        // Remove focus from text editor by hiding the keyboard/cursor
-        DispatchQueue.main.async {
-            NSApplication.shared.keyWindow?.makeFirstResponder(nil)
-        }
-        
-        // Reset chunk counter and start initial recording
-        chunkCounter = 0
-        
-        // Start the first recording chunk
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let audioURL = documentsPath.appendingPathComponent("recording_chunk_0.m4a")
-        
-        let settings = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: 44100,
-            AVNumberOfChannelsKey: 2,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-        ]
-        
-        do {
-            audioRecorder = try AVAudioRecorder(url: audioURL, settings: settings)
-            audioRecorder?.record()
-            
-            // Start chunked recording timer
-            startChunkedRecording()
-            
-            isRecording = true
-            isListening = true
-            startMicAnimation()
-            // showToast(message: "Recording started", type: .success)
-        } catch {
-            showToast(message: "Failed to start recording: \(error.localizedDescription)", type: .error)
-            isVoiceInputMode = false
-        }
-    }
     
-    func startChunkedRecording() {
-        // Start a timer to process audio chunks every 3 seconds
-        chunkTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in
-            self.processAudioChunk()
-        }
-    }
     
-    func processAudioChunk() {
-        guard isRecording else { return }
-        
-        // Stop current recording and start a new one
-        audioRecorder?.stop()
-        
-        // Process the current chunk
-        if let url = audioRecorder?.url {
-            transcribeAudioChunk(url: url, chunkIndex: chunkCounter)
-            chunkCounter += 1
-        }
-        
-        // Start recording the next chunk
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let audioURL = documentsPath.appendingPathComponent("recording_chunk_\(chunkCounter).m4a")
-        
-        let settings = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: 44100,
-            AVNumberOfChannelsKey: 2,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-        ]
-        
-        do {
-            audioRecorder = try AVAudioRecorder(url: audioURL, settings: settings)
-            audioRecorder?.record()
-        } catch {
-            showToast(message: "Failed to continue recording: \(error.localizedDescription)", type: .error)
-            stopRecording()
-        }
-    }
     
-    func stopRecording() {
-        // Stop the chunk timer
-        chunkTimer?.invalidate()
-        chunkTimer = nil
-        
-        // Stop current recording
-        audioRecorder?.stop()
-        
-        // Process the final chunk if it exists
-        if let url = audioRecorder?.url {
-            transcribeAudioChunk(url: url, chunkIndex: chunkCounter)
-        }
-        
-        // Exit voice input mode
-        isVoiceInputMode = false
-        isRecording = false
-        isListening = false
-        stopMicAnimation()
-        
-
-    }
     
-    func transcribeAudioChunk(url: URL, chunkIndex: Int) {
-        
-        // Check if the audio file has content (avoid transcribing empty chunks)
-        guard let audioData = try? Data(contentsOf: url), audioData.count > 1000 else {
-            // Clean up small/empty audio file
-            try? FileManager.default.removeItem(at: url)
-            return
-        }
-        
-        // Prepare request to DeepGram API
-        let apiKey = "API_KEY_DEEPGRAM"
-        let endpoint = URL(string: "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true")!
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.setValue("Token \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("audio/m4a", forHTTPHeaderField: "Content-Type")
-        request.httpBody = audioData
-        
-        // Send request
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            DispatchQueue.main.async {
-                if let error = error {
-                    print("Transcription error for chunk \(chunkIndex): \(error)")
-                    // Don't show error toast for individual chunks to avoid spam
-                    return
-                }
-                
-                guard let data = data else {
-                    print("No data returned from DeepGram API for chunk \(chunkIndex)")
-                    return
-                }
-                
-                // Check for API errors
-                if let httpResponse = response as? HTTPURLResponse {
-                    if httpResponse.statusCode != 200 {
-                        if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                           let error = errorJson["error"] as? [String: Any],
-                           let message = error["message"] as? String {
-                            print("DeepGram API Error for chunk \(chunkIndex): \(message)")
-                        } else {
-                            print("API Error for chunk \(chunkIndex): Status \(httpResponse.statusCode)")
-                        }
-                        return
-                    }
-                }
-                
-                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let results = json["results"] as? [String: Any],
-                   let channels = results["channels"] as? [[String: Any]],
-                   let firstChannel = channels.first,
-                   let alternatives = firstChannel["alternatives"] as? [[String: Any]],
-                   let firstAlternative = alternatives.first,
-                   let textResult = firstAlternative["transcript"] as? String {
-                    
-                    // Filter out empty or very short transcriptions
-                    let cleanedText = textResult.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !cleanedText.isEmpty && cleanedText.count > 2 {
-                        // Insert the transcribed text at the end of current text
-                        let separator = self.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : " "
-                        self.text += separator + cleanedText.prefix(1).capitalized + cleanedText.dropFirst()
-                    }
-                } else {
-                    print("Failed to parse DeepGram response for chunk \(chunkIndex)")
-                }
-            }
-        }.resume()
-        
-        // Clean up audio file
-        try? FileManager.default.removeItem(at: url)
-    }
-    
-    func transcribeAudio(url: URL) {
-        
-        isTranscribing = true
-        
-        // Prepare request to DeepGram API
-        let apiKey = "API_KEY_DEEPGRAM"
-        let endpoint = URL(string: "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true")!
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.setValue("Token \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("audio/m4a", forHTTPHeaderField: "Content-Type")
-        
-        // Set request body with audio data
-        if let audioData = try? Data(contentsOf: url) {
-            request.httpBody = audioData
-        }
-        
-        // Send request
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            DispatchQueue.main.async {
-                self.isTranscribing = false
-                
-                if let error = error {
-                    self.showToast(message: "Network error: \(error.localizedDescription)", type: .error)
-                    print("Transcription error: \(error)")
-                    return
-                }
-                
-                guard let data = data else {
-                    self.showToast(message: "No response from DeepGram", type: .error)
-                    print("No data returned from DeepGram API")
-                    return
-                }
-                
-                // Check for API errors
-                if let httpResponse = response as? HTTPURLResponse {
-                    if httpResponse.statusCode != 200 {
-                        if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                           let error = errorJson["error"] as? [String: Any],
-                           let message = error["message"] as? String {
-                            self.showToast(message: "DeepGram API Error: \(message)", type: .error)
-                        } else {
-                            self.showToast(message: "API Error: Status \(httpResponse.statusCode)", type: .error)
-                        }
-                        return
-                    }
-                }
-                
-                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let results = json["results"] as? [String: Any],
-                   let channels = results["channels"] as? [[String: Any]],
-                   let firstChannel = channels.first,
-                   let alternatives = firstChannel["alternatives"] as? [[String: Any]],
-                   let firstAlternative = alternatives.first,
-                   let textResult = firstAlternative["transcript"] as? String {
-                    // Insert the transcribed text at the end of current text
-                    self.text += (self.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : " ") + textResult.prefix(1).capitalized + textResult.dropFirst()
-                    self.showToast(message: "Text transcribed successfully", type: .success)
-                } else {
-                    self.showToast(message: "Failed to parse transcription response", type: .error)
-                    print("Failed to parse DeepGram response: \(String(data: data, encoding: .utf8) ?? "")")
-                }
-            }
-        }.resume()
-        
-        // Clean up audio file
-        try? FileManager.default.removeItem(at: url)
-    }
     
     func showToast(message: String, type: ToastType) {
         toastMessage = message
@@ -3165,174 +2796,7 @@ struct ContentView: View {
         }
     }
     
-    func startMicAnimation() {
-        micDotTimer?.invalidate()
-        micDotTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { _ in
-            micDotAngle += 1.2
-            if micDotAngle > 360 { micDotAngle -= 360 }
-        }
-    }
     
-    func stopMicAnimation() {
-        micDotTimer?.invalidate()
-        micDotTimer = nil
-    }
-    
-    func cleanupRecording() {
-        // Stop all timers and recording
-        chunkTimer?.invalidate()
-        chunkTimer = nil
-        micDotTimer?.invalidate()
-        micDotTimer = nil
-        audioRecorder?.stop()
-        audioRecorder = nil
-        
-        // Reset states
-        isRecording = false
-        isListening = false
-        isVoiceInputMode = false
-        isTranscribing = false
-    }
-    
-    // MARK: - Live Transcription Functions
-    func startLiveTranscription() {
-        // Load Deepgram API key from keychain when user clicks microphone
-        
-        // Check microphone permission
-        let status = AVCaptureDevice.authorizationStatus(for: .audio)
-        switch status {
-        case .authorized:
-            setupLiveTranscription()
-        case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .audio) { granted in
-                DispatchQueue.main.async {
-                    if granted {
-                        self.setupLiveTranscription()
-                    } else {
-                        self.showToast(message: "Microphone access denied. Please enable in System Settings.", type: .error)
-                    }
-                }
-            }
-        case .denied, .restricted:
-            showToast(message: "Microphone access denied. Please enable in System Settings.", type: .error)
-        @unknown default:
-            showToast(message: "Unknown microphone permission status", type: .error)
-        }
-    }
-    
-    private func setupLiveTranscription() {
-        // Enter voice input mode
-        isVoiceInputMode = true
-        isLiveTranscribing = true
-        isRecording = true // Keep this for UI compatibility (microphone animation)
-        
-        // Clear previous transcriptions
-        liveFinalText = ""
-        liveInterimText = ""
-        
-        
-        // Remove focus from text editor
-        DispatchQueue.main.async {
-            NSApplication.shared.keyWindow?.makeFirstResponder(nil)
-        }
-        
-        // Start microphone animation
-        startMicAnimation()
-        
-                 // Connect to Deepgram live API
-         liveTranscription.connect(apiKey: "API_KEY_DEEPGRAM", onTranscriptUpdate: { transcript, isFinal in
-             DispatchQueue.main.async {
-                 self.handleLiveTranscript(transcript, isFinal: isFinal)
-             }
-         }, onError: { error in
-             DispatchQueue.main.async {
-                 self.handleLiveTranscriptionError(error)
-             }
-         })
-        
-        print("🎤 Live transcription started")
-    }
-    
-    private func handleLiveTranscript(_ transcript: String, isFinal: Bool) {
-        guard !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        
-        if isFinal {
-            // Add final transcript to text
-            let cleanedText = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-            let capitalizedText = cleanedText.prefix(1).capitalized + cleanedText.dropFirst()
-            
-            // Find current cursor position or append to end
-            let separator = editingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : " "
-            editingText += separator + capitalizedText
-            
-            // Update the latest USER section
-            if let lastUserIdx = sections.lastIndex(where: { $0.type == .user }) {
-                sections[lastUserIdx].text = editingText
-            }
-            
-            // Save to file
-            if let currentId = selectedEntryId,
-               let currentEntry = entries.first(where: { $0.id == currentId }) {
-                saveEntry(entry: currentEntry)
-            }
-            
-            // Clear interim text
-            liveInterimText = ""
-            
-            // Auto-scroll to keep latest text visible
-            scrollToBottom()
-            
-        } else {
-            // Update interim text display (could be shown in UI with different styling)
-            liveInterimText = transcript
-        }
-    }
-    
-    private func handleLiveTranscriptionError(_ error: String) {
-        // Stop live transcription on error
-        stopLiveTranscription()
-        
-        // Show error to user
-        showToast(message: "Live transcription error: \(error)", type: .error)
-        
-        print("❌ Live transcription error: \(error)")
-    }
-    
-    func stopLiveTranscription() {
-        // Disconnect from Deepgram
-        liveTranscription.disconnect()
-        
-        // Reset states
-        isLiveTranscribing = false
-        isRecording = false
-        isVoiceInputMode = false
-        liveInterimText = ""
-        
-        // Stop microphone animation
-        stopMicAnimation()
-        
-        
-        print("🔌 Live transcription stopped")
-    }
-    
-    private func scrollToBottom() {
-        // Trigger scroll to bottom for text editor
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            scrollTextEditorToBottom()
-        }
-    }
-    
-    private func scrollTextEditorToBottom() {
-        // Use AppKit to scroll the underlying NSTextView to bottom
-        DispatchQueue.main.async {
-            if let window = NSApplication.shared.keyWindow,
-               let textView = window.contentView?.findTextView() as? NSTextView {
-                textView.scrollToEndOfDocument(nil)
-            }
-        }
-    }
-    
-    // --- End Audio Recording and Whisper API ---
     
     // --- Reflection Functionality ---
     
@@ -3561,334 +3025,12 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Deepgram Live Transcription Manager
-class DeepgramLiveTranscription: NSObject, ObservableObject {
-    @Published var isConnected: Bool = false
-    @Published var isTranscribing: Bool = false
-    @Published var interimTranscript: String = ""
-    @Published var finalTranscript: String = ""
-    
-    private var webSocketTask: URLSessionWebSocketTask?
-    private var urlSession: URLSession?
-    private var audioEngine: AVAudioEngine?
-    private var inputNode: AVAudioInputNode?
-    
-    private var apiKey: String = ""
-    private var onTranscriptUpdate: ((String, Bool) -> Void)?
-    private var onError: ((String) -> Void)?
-    
-    override init() {
-        super.init()
-        setupURLSession()
-    }
-    
-    private func setupURLSession() {
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 10
-        config.timeoutIntervalForResource = 0 // No timeout for streaming
-        urlSession = URLSession(configuration: config, delegate: self, delegateQueue: nil)
-    }
-    
-    func connect(apiKey: String, onTranscriptUpdate: @escaping (String, Bool) -> Void, onError: ((String) -> Void)? = nil) {
-        guard !apiKey.isEmpty else {
-            print("❌ Deepgram API key is empty")
-            return
-        }
-        
-        self.apiKey = apiKey
-        self.onTranscriptUpdate = onTranscriptUpdate
-        self.onError = onError
-        
-        // Build WebSocket URL with parameters
-        var urlComponents = URLComponents(string: "wss://api.deepgram.com/v1/listen")!
-        urlComponents.queryItems = [
-            URLQueryItem(name: "model", value: "nova-2"),
-            URLQueryItem(name: "smart_format", value: "true"),
-            URLQueryItem(name: "interim_results", value: "true"),
-            URLQueryItem(name: "utterance_end_ms", value: "1000"),
-            URLQueryItem(name: "vad_events", value: "true"),
-            URLQueryItem(name: "encoding", value: "linear16"),
-            URLQueryItem(name: "sample_rate", value: "16000"),
-            URLQueryItem(name: "channels", value: "1"),
-            URLQueryItem(name: "language", value: "en-US")
-        ]
-        
-        guard let url = urlComponents.url else {
-            let error = "Failed to create WebSocket URL"
-            print("❌ \(error)")
-            onError?(error)
-            return
-        }
-        
-        var request = URLRequest(url: url)
-        request.setValue("Token \(apiKey)", forHTTPHeaderField: "Authorization")
-        print("🔑 Authorization header: Token \(String(apiKey.prefix(10)))...") // Only show first 10 chars for security
-        
-        webSocketTask = urlSession?.webSocketTask(with: request)
-        
-        // Set up listening before resuming
-        startListening()
-        
-        // Resume the WebSocket task
-        webSocketTask?.resume()
-        
-        // Set up audio engine after WebSocket connection
-        setupAudioEngine()
-        
-        print("🔗 Connecting to Deepgram WebSocket...")
-        print("🔗 WebSocket URL: \(url.absoluteString)")
-    }
-    
-         private func startListening() {
-         webSocketTask?.receive { result in
-             switch result {
-             case .success(let message):
-                 self.handleWebSocketMessage(message)
-                 self.startListening() // Continue listening
-             case .failure(let error):
-                 print("❌ WebSocket receive error: \(error)")
-                 DispatchQueue.main.async {
-                     self.isConnected = false
-                     self.onError?("WebSocket connection error: \(error.localizedDescription)")
-                 }
-             }
-         }
-     }
-    
-    private func handleWebSocketMessage(_ message: URLSessionWebSocketTask.Message) {
-        switch message {
-        case .string(let text):
-            handleTranscriptionResponse(text)
-        case .data(let data):
-            if let text = String(data: data, encoding: .utf8) {
-                handleTranscriptionResponse(text)
-            }
-        @unknown default:
-            print("⚠️ Unknown WebSocket message type")
-        }
-    }
-    
-    private func handleTranscriptionResponse(_ response: String) {
-        print("📝 Deepgram response: \(response)")
-        
-        guard let data = response.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            print("❌ Failed to parse transcription response")
-            return
-        }
-        
-        // Handle different message types
-        if let type = json["type"] as? String {
-            switch type {
-            case "Results":
-                handleResultsMessage(json)
-            case "UtteranceEnd":
-                handleUtteranceEnd()
-            case "SpeechStarted":
-                DispatchQueue.main.async {
-                    self.isTranscribing = true
-                }
-            case "SpeechEnded":
-                DispatchQueue.main.async {
-                    self.isTranscribing = false
-                }
-            default:
-                break
-            }
-        }
-    }
-    
-    private func handleResultsMessage(_ json: [String: Any]) {
-        guard let channel = json["channel"] as? [String: Any],
-              let alternatives = channel["alternatives"] as? [[String: Any]],
-              let alternative = alternatives.first,
-              let transcript = alternative["transcript"] as? String else {
-            return
-        }
-        
-        let isFinal = json["is_final"] as? Bool ?? false
-        
-        DispatchQueue.main.async {
-            if isFinal {
-                self.finalTranscript += " " + transcript
-                self.interimTranscript = ""
-                self.onTranscriptUpdate?(transcript, true)
-            } else {
-                self.interimTranscript = transcript
-                self.onTranscriptUpdate?(transcript, false)
-            }
-        }
-    }
-    
-    private func handleUtteranceEnd() {
-        DispatchQueue.main.async {
-            if !self.interimTranscript.isEmpty {
-                self.finalTranscript += " " + self.interimTranscript
-                self.interimTranscript = ""
-            }
-        }
-    }
-    
-    private func setupAudioEngine() {
-        audioEngine = AVAudioEngine()
-        inputNode = audioEngine?.inputNode
-        
-        guard let audioEngine = audioEngine, let inputNode = inputNode else {
-            let error = "Failed to setup audio engine"
-            print("❌ \(error)")
-            onError?(error)
-            return
-        }
-        
-        let recordingFormat = inputNode.outputFormat(forBus: 0)
-        let desiredFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, 
-                                        sampleRate: 16000, 
-                                        channels: 1, 
-                                        interleaved: false)!
-        
-        let converter = AVAudioConverter(from: recordingFormat, to: desiredFormat)
-        
-        // Install tap with proper buffer size for 16kHz streaming
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
-            self.processAudioBuffer(buffer, converter: converter, outputFormat: desiredFormat)
-        }
-        
-        do {
-            try audioEngine.start()
-            print("🎤 Audio engine started")
-            print("🎤 Recording format: \(recordingFormat)")
-            print("🎤 Desired format: \(desiredFormat)")
-        } catch {
-            let errorMsg = "Failed to start audio engine: \(error.localizedDescription)"
-            print("❌ \(errorMsg)")
-            onError?(errorMsg)
-        }
-    }
-    
-    private func processAudioBuffer(_ buffer: AVAudioPCMBuffer, converter: AVAudioConverter?, outputFormat: AVAudioFormat) {
-        guard let converter = converter else { 
-            print("❌ No converter available")
-            return 
-        }
-        
-        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * outputFormat.sampleRate / buffer.format.sampleRate)
-        guard let convertedBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity) else { 
-            print("❌ Failed to create converted buffer")
-            return 
-        }
-        
-        var error: NSError?
-        let inputBlock: AVAudioConverterInputBlock = { _, outStatus in
-            outStatus.pointee = .haveData
-            return buffer
-        }
-        
-        let status = converter.convert(to: convertedBuffer, error: &error, withInputFrom: inputBlock)
-        
-        if let error = error {
-            print("❌ Audio conversion error: \(error.localizedDescription)")
-        } else if status == .haveData {
-            sendAudioData(convertedBuffer)
-        }
-    }
-    
-    private func sendAudioData(_ buffer: AVAudioPCMBuffer) {
-        guard let int16Buffer = buffer.int16ChannelData?[0],
-              buffer.frameLength > 0 else { 
-            print("❌ Invalid audio buffer data")
-            return 
-        }
-        
-        let data = Data(bytes: int16Buffer, count: Int(buffer.frameLength) * 2)
-        
-        webSocketTask?.send(.data(data)) { error in
-            if let error = error {
-                print("❌ Failed to send audio data: \(error)")
-                DispatchQueue.main.async {
-                    self.onError?("Failed to send audio data: \(error.localizedDescription)")
-                }
-            }
-        }
-    }
-    
-    func disconnect() {
-        // Stop audio engine safely
-        if let audioEngine = audioEngine, audioEngine.isRunning {
-            audioEngine.stop()
-        }
-        
-        // Remove audio tap safely
-        if let inputNode = inputNode {
-            inputNode.removeTap(onBus: 0)
-        }
-        
-        // Clean up audio components
-        audioEngine = nil
-        inputNode = nil
-        
-        // Send close frame and cleanup WebSocket
-        webSocketTask?.cancel(with: .goingAway, reason: nil)
-        webSocketTask = nil
-        
-        // Clear callbacks
-        onTranscriptUpdate = nil
-        onError = nil
-        
-        DispatchQueue.main.async {
-            self.isConnected = false
-            self.isTranscribing = false
-            self.interimTranscript = ""
-            self.finalTranscript = ""
-        }
-        
-        print("🔌 Disconnected from Deepgram")
-    }
-}
-
-extension DeepgramLiveTranscription: URLSessionWebSocketDelegate {
-    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocolName: String?) {
-        DispatchQueue.main.async {
-            self.isConnected = true
-        }
-        print("✅ WebSocket connected to Deepgram")
-        print("✅ Protocol: \(protocolName ?? "none")")
-    }
-    
-    func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-        DispatchQueue.main.async {
-            self.isConnected = false
-            self.isTranscribing = false
-        }
-        let reasonString = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "No reason provided"
-        print("🔌 WebSocket disconnected: \(closeCode) - \(reasonString)")
-        
-        // Notify error handler if unexpected disconnection
-        if closeCode != .goingAway && closeCode != .normalClosure {
-            DispatchQueue.main.async {
-                self.onError?("WebSocket disconnected unexpectedly: \(closeCode)")
-            }
-        }
-    }
-    
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if let error = error {
-            print("❌ URLSession task completed with error: \(error)")
-            DispatchQueue.main.async {
-                self.isConnected = false
-                self.onError?("Connection failed: \(error.localizedDescription)")
-            }
-        }
-    }
-}
-
 // Add these view structs before the main ContentView struct
 struct SettingsModal: View {
     @Environment(\.colorScheme) var colorScheme
     @Binding var showingSettings: Bool
     @Binding var selectedSettingsTab: SettingsTab
     @Binding var openAIAPIKey: String
-    @Binding var humeAPIKey: String
-    @Binding var showMicrophone: Bool
     @ObservedObject var settingsManager: SettingsManager
     let runDateRangeReflection: (Date, Date, String) -> Void
     
@@ -3898,8 +3040,6 @@ struct SettingsModal: View {
             SettingsContent(
                 selectedTab: selectedSettingsTab,
                 openAIAPIKey: $openAIAPIKey,
-                humeAPIKey: $humeAPIKey,
-                showMicrophone: $showMicrophone,
                 settingsManager: settingsManager,
                 runDateRangeReflection: runDateRangeReflection
             )
@@ -3945,7 +3085,7 @@ struct SettingsSidebar: View {
                 )
                 
                 SettingsSidebarItem(
-                    title: "Voice Mode",
+                    title: "Voice",
                     icon: "waveform",
                     isSelected: selectedTab == .transcription,
                     action: { selectedTab = .transcription }
@@ -3994,8 +3134,6 @@ struct SettingsSidebarItem: View {
 struct SettingsContent: View {
     let selectedTab: SettingsTab
     @Binding var openAIAPIKey: String
-    @Binding var humeAPIKey: String
-    @Binding var showMicrophone: Bool
     @ObservedObject var settingsManager: SettingsManager
     let runDateRangeReflection: (Date, Date, String) -> Void
     @Environment(\.colorScheme) var colorScheme
@@ -4012,9 +3150,9 @@ struct SettingsContent: View {
                     onRunCustom: { fromDate, toDate in runDateRangeReflection(fromDate, toDate, "Custom") }
                 )
             case .apiKeys:
-                APIKeysSettingsView(openAIAPIKey: $openAIAPIKey, humeAPIKey: $humeAPIKey)
+                APIKeysSettingsView(openAIAPIKey: $openAIAPIKey)
             case .transcription:
-                TranscriptionSettingsView(showMicrophone: $showMicrophone, settingsManager: settingsManager)
+                TranscriptionSettingsView(settingsManager: settingsManager)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -4025,19 +3163,12 @@ struct SettingsContent: View {
 struct APIKeysSettingsView: View {
     @Environment(\.colorScheme) var colorScheme
     @Binding var openAIAPIKey: String
-    @Binding var humeAPIKey: String
     
     @State private var tempOpenAIApiKey: String = ""
     @State private var hasUnsavedOpenAI: Bool = false
     @State private var showOpenAISaveConfirmation: Bool = false
     @State private var isEditingMode: Bool = false
     @State private var keychainAccessDenied: Bool = false
-    
-    @State private var tempHumeApiKey: String = ""
-    @State private var hasUnsavedHume: Bool = false
-    @State private var showHumeSaveConfirmation: Bool = false
-    @State private var isEditingHumeMode: Bool = false
-    @State private var humeKeychainAccessDenied: Bool = false
     
     private func enterEditMode() {
         // Check if keychain access is denied first
@@ -4081,51 +3212,6 @@ struct APIKeysSettingsView: View {
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             showOpenAISaveConfirmation = false
-        }
-    }
-    
-    private func enterHumeEditMode() {
-        // Check if keychain access is denied first
-        if KeychainHelper.shared.isKeychainAccessDenied(for: .hume) {
-            print("🔒 enterHumeEditMode: keychain access denied - staying in non-edit mode")
-            humeKeychainAccessDenied = true
-            return
-        }
-        
-        // Load current saved API key from keychain when user clicks Edit
-        let savedKey = KeychainHelper.shared.loadAPIKey(for: .hume) ?? ""
-        print("🔓 enterHumeEditMode: loaded from keychain = '\(savedKey)'")
-        tempHumeApiKey = savedKey
-        humeAPIKey = savedKey  // Update the main state as well
-        print("🔓 Set tempHumeApiKey to: '\(tempHumeApiKey)'")
-        print("🔓 Set humeAPIKey to: '\(humeAPIKey)'")
-        isEditingHumeMode = true
-        hasUnsavedHume = false
-        humeKeychainAccessDenied = false
-    }
-    
-    private func saveAndExitHumeEditMode() {
-        // Save the API key to keychain
-        print("🔐 saveAndExitHumeEditMode: tempHumeApiKey = '\(tempHumeApiKey)'")
-        if !tempHumeApiKey.isEmpty {
-            print("🔐 Saving to keychain: '\(tempHumeApiKey)'")
-            KeychainHelper.shared.saveAPIKey(tempHumeApiKey, for: .hume)
-            humeAPIKey = tempHumeApiKey
-            print("🔐 Updated humeAPIKey to: '\(humeAPIKey)'")
-        } else {
-            print("🔐 Deleting from keychain (empty key)")
-            KeychainHelper.shared.deleteAPIKey(for: .hume)
-            humeAPIKey = ""
-        }
-        
-        // Exit edit mode and show confirmation
-        isEditingHumeMode = false
-        hasUnsavedHume = false
-        showHumeSaveConfirmation = true
-        tempHumeApiKey = "" // Clear the temp field
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            showHumeSaveConfirmation = false
         }
     }
     
@@ -4203,78 +3289,6 @@ struct APIKeysSettingsView: View {
                 .animation(.easeInOut(duration: 0.2), value: showOpenAISaveConfirmation)
             }
             
-            // Hume API Key Input
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Hume API Key")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.primary)
-                
-                SecureField(isEditingHumeMode ? "Enter your Hume API key" : "••••••••••••••••••••", text: $tempHumeApiKey)
-                    .textFieldStyle(PlainTextFieldStyle())
-                    .font(.system(size: 13, design: .monospaced))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .background(
-                        RoundedRectangle(cornerRadius: 5)
-                            .stroke(Color.gray.opacity(isEditingHumeMode ? 0.5 : 0.3), lineWidth: 1)
-                            .background(
-                                RoundedRectangle(cornerRadius: 5)
-                                    .fill(isEditingHumeMode ? Color.clear : Color.gray.opacity(0.1))
-                            )
-                    )
-                    .foregroundColor(isEditingHumeMode ? .primary : .secondary)
-                    .disabled(!isEditingHumeMode)
-                    .onChange(of: tempHumeApiKey) { newValue in
-                        if isEditingHumeMode {
-                            hasUnsavedHume = (newValue != humeAPIKey)
-                        }
-                    }
-                
-                HStack(spacing: 2) {
-                    Text("Used for voice mode. Get your key at")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    
-                    Link("platform.hume.ai/settings/keys", destination: URL(string: "https://platform.hume.ai/settings/keys")!)
-                        .font(.caption)
-                        .foregroundColor(.blue)
-                }
-                
-                HStack(spacing: 12) {
-                    Button(action: {
-                        if isEditingHumeMode {
-                            saveAndExitHumeEditMode()
-                        } else {
-                            enterHumeEditMode()
-                        }
-                    }) {
-                        Text(isEditingHumeMode ? "Save" : "Edit")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(colorScheme == .dark ? Color.black : .primary)
-                            )
-                    }
-                    .buttonStyle(PlainButtonStyle())
-                    
-                    if showHumeSaveConfirmation {
-                        HStack(spacing: 6) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                                .font(.system(size: 12))
-                            Text("Saved")
-                                .font(.system(size: 12))
-                                .foregroundColor(.secondary)
-                        }
-                        .transition(.opacity)
-                    }
-                }
-                .animation(.easeInOut(duration: 0.2), value: showHumeSaveConfirmation)
-            }
-            
             Spacer()
         }
         .padding(.top, 8)
@@ -4283,10 +3297,6 @@ struct APIKeysSettingsView: View {
             tempOpenAIApiKey = ""
             hasUnsavedOpenAI = false
             isEditingMode = false
-            
-            tempHumeApiKey = ""
-            hasUnsavedHume = false
-            isEditingHumeMode = false
         }
     }
 }
@@ -4530,17 +3540,12 @@ struct ReflectionsSettingsView: View {
 }
 
 struct TranscriptionSettingsView: View {
-    @Binding var showMicrophone: Bool
     @ObservedObject var settingsManager: SettingsManager
     
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-
-            Toggle("Show Voice Mode", isOn: $showMicrophone)
-                .onChange(of: showMicrophone) { newValue in
-                    settingsManager.updateShowMicrophone(newValue)
-                }
-
+            Text("Coming soon :)")
+                .foregroundColor(.gray)
             Spacer()
         }
         .padding(.top, 8)
