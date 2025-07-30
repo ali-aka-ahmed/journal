@@ -333,6 +333,11 @@ struct ContentView: View {
     @State private var showingSettings = false // Add state for settings menu
     @State private var isHoveringSettings = false // Add state for settings hover
     @State private var selectedSettingsTab: SettingsTab = .reflections // Add state for selected tab
+    @State private var showingCommandBar = false // Add state for command bar
+    @State private var commandBarText = "" // Add state for command bar text
+    @FocusState private var isCommandBarFocused: Bool // Add focus state for command bar
+    @State private var searchResults: [(entry: HumanEntry, matchContext: String, range: Range<String.Index>)] = [] // Search results with context
+    @State private var selectedSearchIndex: Int = 0 // Selected index in search results dropdown
     @State private var openAIAPIKey: String = ""
     @StateObject private var reflectionViewModel = ReflectionViewModel()
     @State private var followUpText: String = ""
@@ -612,6 +617,172 @@ struct ContentView: View {
         runDateRangeReflection(fromDate: fromDate, toDate: toDate, type: type)
     }
     
+    // Function to run question response
+    private func runQuestionResponse(question: String) {
+        // Load OpenAI API key from keychain
+        guard let apiKey = getOpenAIKeyFromKeychain(), !apiKey.isEmpty else {
+            showToast(message: "OpenAI API key not configured in Settings", type: .error)
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showingSettings = true
+                selectedSettingsTab = .apiKeys
+            }
+            return
+        }
+        
+        guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            showToast(message: "Please enter a question", type: .error)
+            return
+        }
+        
+        // Gather all entries by using a very wide date range
+        let calendar = Calendar.current
+        let now = Date()
+        let startDate = calendar.date(byAdding: .year, value: -10, to: now) ?? now // 10 years ago
+        let endDate = now
+        
+        let allContent = gatherEntriesInDateRange(from: startDate, to: endDate)
+        
+        // Check if there are any entries
+        if allContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            showToast(message: "No journal entries found", type: .error)
+            return
+        }
+        
+        // Create new question entry
+        let newEntry = createQuestionEntry(question: question)
+        
+        // Select the new entry and set up the question UI
+        selectedEntryId = newEntry.id
+        entries.insert(newEntry, at: 0)
+        
+        // Set up sections with the initial USER section containing the question
+        sections = [EntrySection(type: .user, text: question)]
+        editingText = "" // Don't show the question text in the editor, only in the right panel
+        
+        // Add REFLECTION section and start streaming
+        sections.append(EntrySection(type: .reflection, text: ""))
+        
+        // Show reflection panel and freeze text editor
+        showReflectionPanel = true
+        hasInitiatedReflection = true
+        isStreamingReflection = true
+        
+        // Start question response with the gathered content
+        reflectionViewModel.startQuestionResponse(apiKey: apiKey, allEntries: allContent, question: question) {
+            // On complete: add new empty USER section, unfreeze editor, and save
+            self.sections.append(EntrySection(type: .user, text: "\n\n"))
+            self.editingText = "\n\n"
+            self.isStreamingReflection = false
+            
+            // Force UI refresh to ensure final chunk renders
+            DispatchQueue.main.async {
+                self.forceRefresh.toggle()
+            }
+            
+            // Save the completed entry
+            if let currentId = self.selectedEntryId,
+               let currentEntry = self.entries.first(where: { $0.id == currentId }) {
+                self.saveEntry(entry: currentEntry)
+            }
+        } onStream: { streamedText in
+            // Update the latest REFLECTION section as it streams
+            if let lastReflectionIndex = self.sections.lastIndex(where: { $0.type == .reflection }) {
+                self.sections[lastReflectionIndex].text = streamedText
+            }
+            // Save to file during streaming
+            if let currentId = self.selectedEntryId,
+               let currentEntry = self.entries.first(where: { $0.id == currentId }) {
+                self.saveEntry(entry: currentEntry)
+            }
+        }
+        
+        // Close command bar
+        withAnimation(.easeInOut(duration: 0.1)) {
+            showingCommandBar = false
+            commandBarText = ""
+            isCommandBarFocused = false
+            searchResults = []
+            selectedSearchIndex = 0
+        }
+    }
+    
+    // Function to create highlighted text with search term matches
+    private func highlightedText(_ text: String, searchTerm: String) -> Text {
+        guard !searchTerm.isEmpty else { return Text(text) }
+        
+        // Create attributed string for highlighting
+        var attributedString = AttributedString(text)
+        let lowercaseText = text.lowercased()
+        let lowercaseSearchTerm = searchTerm.lowercased()
+        
+        var searchStartIndex = lowercaseText.startIndex
+        while let range = lowercaseText.range(of: lowercaseSearchTerm, range: searchStartIndex..<lowercaseText.endIndex) {
+            // Convert string indices to AttributedString indices
+            let startIndex = AttributedString.Index(range.lowerBound, within: attributedString)!
+            let endIndex = AttributedString.Index(range.upperBound, within: attributedString)!
+            let attributedRange = startIndex..<endIndex
+            
+            // Apply highlight styling
+            attributedString[attributedRange].backgroundColor = Color(red: 0.8, green: 0.7, blue: 0.6)
+            attributedString[attributedRange].foregroundColor = .black
+            
+            searchStartIndex = range.upperBound
+        }
+        
+        return Text(attributedString)
+    }
+    
+    // Function to search entries for exact string match
+    private func searchEntries(_ searchText: String) {
+        guard !searchText.isEmpty else {
+            searchResults = []
+            selectedSearchIndex = 0
+            return
+        }
+        
+        searchResults = []
+        selectedSearchIndex = 0
+        
+        for entry in entries {
+            // Get the full content of the entry
+            let documentsDirectory = getDocumentsDirectory()
+            let fileURL = documentsDirectory.appendingPathComponent(entry.filename)
+            
+            if let content = try? String(contentsOf: fileURL) {
+                // Clean content by removing separators before searching
+                let cleanedContent = removeReflectionSeparators(from: content)
+                
+                // Search for exact string match (case-insensitive) in cleaned content
+                let searchRange = cleanedContent.range(of: searchText, options: .caseInsensitive)
+                
+                if let range = searchRange {
+                    // Get context around the match (50 characters before and after)
+                    let contextStart = cleanedContent.index(range.lowerBound, offsetBy: -50, limitedBy: cleanedContent.startIndex) ?? cleanedContent.startIndex
+                    let contextEnd = cleanedContent.index(range.upperBound, offsetBy: 50, limitedBy: cleanedContent.endIndex) ?? cleanedContent.endIndex
+                    
+                    let contextRange = contextStart..<contextEnd
+                    var matchContext = String(cleanedContent[contextRange])
+                    
+                    // Add ellipsis if we're not at the beginning/end
+                    if contextStart != cleanedContent.startIndex {
+                        matchContext = "..." + matchContext
+                    }
+                    if contextEnd != cleanedContent.endIndex {
+                        matchContext = matchContext + "..."
+                    }
+                    
+                    // Clean up the match context to remove any remaining separators and extra whitespace
+                    matchContext = matchContext
+                        .replacingOccurrences(of: "\n\n", with: " ")
+                        .replacingOccurrences(of: "\n", with: " ")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    
+                    searchResults.append((entry: entry, matchContext: matchContext, range: range))
+                }
+            }
+        }
+    }
+    
     // Function to gather entries from the last 7 days
     private func gatherEntriesInDateRange(from startDate: Date, to endDate: Date) -> String {
         let documentsDirectory = getDocumentsDirectory()
@@ -730,6 +901,32 @@ struct ContentView: View {
                         }
                     }
                 }
+                // Handle Question entries: [Question]-[MM-dd-yyyy]-[HH-mm-ss].md
+                else if filename.hasPrefix("[Question]-") {
+                    let pattern = "\\[Question\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\]"
+                    if let match = filename.range(of: pattern, options: .regularExpression) {
+                        let matchString = String(filename[match])
+                        let components = matchString.components(separatedBy: "]-[")
+                        
+                        if components.count >= 3 {
+                            let questionDateString = components[1]
+                            
+                            let dateFormatter = DateFormatter()
+                            dateFormatter.dateFormat = "MM-dd-yyyy"
+                            
+                            if let questionDate = dateFormatter.date(from: questionDateString) {
+                                let startOfQuestionDate = calendar.startOfDay(for: questionDate)
+                                
+                                // Check if question date is within our range
+                                if startOfQuestionDate >= startOfStartDate && startOfQuestionDate <= startOfEndDate {
+                                    shouldInclude = true
+                                    dateFormatter.dateFormat = "MMMM d"
+                                    displayDate = "Question: \(dateFormatter.string(from: questionDate))"
+                                }
+                            }
+                        }
+                    }
+                }
                 
                 if shouldInclude {
                     do {
@@ -742,8 +939,14 @@ struct ContentView: View {
                             print("  Content length: \(cleanContent.count) characters")
                             print("  Content preview: \(String(cleanContent.prefix(100)))...")
                             
-                            weeklyContent += "\n\n--- \(displayDate) ---\n\n"
-                            weeklyContent += cleanContent
+                            weeklyContent += "\n\nNEW ENTRY \(displayDate)\n\n"
+                            
+                            // Process content to replace separators with proper labels
+                            let processedContent = cleanContent
+                                .replacingOccurrences(of: "--- USER ---", with: "User Input")
+                                .replacingOccurrences(of: "--- REFLECTION ---", with: "User Reflection")
+                            
+                            weeklyContent += processedContent
                             processedFiles.append(filename)
                         } else {
                             print("⚠ Skipping empty file: \(filename)")
@@ -962,6 +1165,36 @@ struct ContentView: View {
         )
     }
     
+    // Function to create a new question entry
+    private func createQuestionEntry(question: String) -> HumanEntry {
+        let id = UUID()
+        let now = Date()
+        let dateFormatter = DateFormatter()
+        
+        // Create filename with question format [Question]-[MM-dd-yyyy]-[HH-mm-ss].md
+        dateFormatter.dateFormat = "MM-dd-yyyy"
+        let dateString = dateFormatter.string(from: now)
+        
+        dateFormatter.dateFormat = "HH-mm-ss"
+        let timeString = dateFormatter.string(from: now)
+        
+        let filename = "[Question]-[\(dateString)]-[\(timeString)].md"
+        
+        // Create display date for sidebar
+        dateFormatter.dateFormat = "MMM d"
+        let displayDate = dateFormatter.string(from: now)
+        
+        // Create preview text with the question (truncated to match updatePreviewText behavior)
+        let previewText = question.isEmpty ? "" : (question.count > 24 ? String(question.prefix(24)) + "..." : question)
+        
+        return HumanEntry(
+            id: id,
+            date: displayDate,
+            filename: filename,
+            previewText: previewText
+        )
+    }
+    
     // Function to create a new weekly entry
     private func createWeeklyEntry(title: String, startDate: Date, endDate: Date) -> HumanEntry {
         let id = UUID()
@@ -1103,6 +1336,29 @@ struct ContentView: View {
                         }
                     }
                 }
+                // Handle Question entries: [Question]-[MM-dd-yyyy]-[HH-mm-ss].md
+                else if filename.hasPrefix("[Question]-") {
+                    let pattern = "\\[Question\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\]"
+                    if let match = filename.range(of: pattern, options: .regularExpression) {
+                        let matchString = String(filename[match])
+                        let components = matchString.components(separatedBy: "]-[")
+                        
+                        if components.count >= 3 {
+                            let dateString = components[1]
+                            let timeString = components[2].replacingOccurrences(of: "]", with: "")
+                            
+                            let dateTimeString = "\(dateString)-\(timeString)"
+                            let dateFormatter = DateFormatter()
+                            dateFormatter.dateFormat = "MM-dd-yyyy-HH-mm-ss"
+                            
+                            if let parsedDate = dateFormatter.date(from: dateTimeString) {
+                                fileDate = parsedDate
+                                dateFormatter.dateFormat = "MMM d"
+                                displayDate = dateFormatter.string(from: parsedDate)
+                            }
+                        }
+                    }
+                }
                 
                 guard let validFileDate = fileDate else {
                     print("Failed to parse date from filename: \(filename)")
@@ -1113,15 +1369,44 @@ struct ContentView: View {
                 do {
                     let content = try String(contentsOf: fileURL, encoding: .utf8)
                     
-                    let separator = "\n\n--- REFLECTION ---\n\n"
-                    let contentForPreview = content.replacingOccurrences(of: separator, with: " ")
-                    // Remove separators from preview
-                    let cleanedPreview = removeReflectionSeparators(from: contentForPreview)
+                    let truncated: String
                     
-                    let preview = cleanedPreview
-                        .replacingOccurrences(of: "\n", with: " ")
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    let truncated = preview.isEmpty ? "" : (preview.count > 30 ? String(preview.prefix(30)) + "..." : preview)
+                    // Special handling for question entries - extract question from USER section
+                    if filename.hasPrefix("[Question]-") {
+                        // Find the first USER section and extract the question
+                        let userSeparator = "--- USER ---"
+                        let reflectionSeparator = "--- REFLECTION ---"
+                        
+                        if let userStart = content.range(of: userSeparator)?.upperBound {
+                            let afterUserSeparator = String(content[userStart...])
+                            let userContent: String
+                            
+                            if let reflectionStart = afterUserSeparator.range(of: reflectionSeparator)?.lowerBound {
+                                userContent = String(afterUserSeparator[..<reflectionStart])
+                            } else {
+                                userContent = afterUserSeparator
+                            }
+                            
+                            let question = userContent
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                                .replacingOccurrences(of: "\n", with: " ")
+                            
+                            truncated = question.isEmpty ? "" : (question.count > 30 ? String(question.prefix(30)) + "..." : question)
+                        } else {
+                            truncated = ""
+                        }
+                    } else {
+                        // Handle other entry types as before
+                        let separator = "\n\n--- REFLECTION ---\n\n"
+                        let contentForPreview = content.replacingOccurrences(of: separator, with: " ")
+                        // Remove separators from preview
+                        let cleanedPreview = removeReflectionSeparators(from: contentForPreview)
+                        
+                        let preview = cleanedPreview
+                            .replacingOccurrences(of: "\n", with: " ")
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        truncated = preview.isEmpty ? "" : (preview.count > 30 ? String(preview.prefix(30)) + "..." : preview)
+                    }
                     
                     return (
                         entry: HumanEntry(
@@ -1384,7 +1669,7 @@ struct ContentView: View {
                                     }
                                 } else {
                                     timerIsRunning = true
-                                    withAnimation(.easeInOut(duration: 0.3)) {
+                                    withAnimation(.easeOut(duration: 0.4)) {
                                         bottomNavOpacity = 0.0
                                     }
                                 }
@@ -1741,45 +2026,66 @@ struct ContentView: View {
             .padding(.trailing, 16)
             .padding(.vertical, 10)
             .background(colorScheme == .light ? Color.lightModeBackground : Color.black)
-                .opacity(bottomNavOpacity)
-                .onHover { hovering in
-                    isHoveringBottomNav = hovering
-                    if hovering {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            bottomNavOpacity = 1.0
-                        }
-                    } else if timerIsRunning {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            bottomNavOpacity = 0.0
-                        }
+            .opacity(bottomNavOpacity)
+            .animation(.easeOut(duration: 0.4), value: bottomNavOpacity)
+            .onHover { hovering in
+                isHoveringBottomNav = hovering
+                if hovering {
+                    withAnimation(.easeIn(duration: 0.2)) {
+                        bottomNavOpacity = 1.0
+                    }
+                } else if timerIsRunning {
+                    withAnimation(.easeOut(duration: 0.3).delay(0.5)) {
+                        bottomNavOpacity = 0.0
                     }
                 }
+            }
             }
         }
         .frame(height: navHeight)
     }
     
     var body: some View {
-        HStack(spacing: 0) {
-            // Sidebar
-            if showingSidebar {
-                sidebar
+        ZStack {
+            HStack(spacing: 0) {
+                // Sidebar
+                if showingSidebar {
+                    sidebar
+                }
+                
+                ZStack {
+                    // Main content area
+                    Group {
+                        if isWeeklyReflection {
+                            centeredReflectionView
+                        } else {
+                            mainContent
+                        }
+                    }
+                    .animation(.easeInOut(duration: 0.2), value: showReflectionPanel)
+                    
+                    // Navigation is an overlay within each of those views
+                }
+                .background(colorScheme == .light ? Color.lightModeBackground : Color.black)
             }
             
-            ZStack {
-                // Main content area
-                Group {
-                    if isWeeklyReflection {
-                        centeredReflectionView
-                    } else {
-                        mainContent
-                    }
+            // Invisible hover zone at the bottom to trigger navbar appearance
+            if timerIsRunning && bottomNavOpacity == 0 {
+                VStack {
+                    Spacer()
+                    Rectangle()
+                        .fill(Color.clear)
+                        .frame(height: 50)
+                        .contentShape(Rectangle())
+                        .onHover { hovering in
+                            if hovering {
+                                withAnimation(.easeIn(duration: 0.2)) {
+                                    bottomNavOpacity = 1.0
+                                }
+                            }
+                        }
                 }
-                .animation(.easeInOut(duration: 0.2), value: showReflectionPanel)
-                
-                // Navigation is an overlay within each of those views
             }
-            .background(colorScheme == .light ? Color.lightModeBackground : Color.black)
         }
         .frame(minWidth: 1100, minHeight: 600)
         .animation(.easeInOut(duration: 0.2), value: showingSidebar)
@@ -1842,12 +2148,261 @@ struct ContentView: View {
             }
         )
         .overlay(
+            // Command Bar Overlay
+            Group {
+                if showingCommandBar {
+                    Color.black.opacity(0.3)
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            withAnimation(.easeInOut(duration: 0.1)) {
+                                showingCommandBar = false
+                                commandBarText = ""
+                                isCommandBarFocused = false
+                                searchResults = []
+                                selectedSearchIndex = 0
+                            }
+                        }
+                    
+                    ZStack(alignment: .top) {
+                        // Command bar input
+                        HStack {
+                            Image(systemName: "magnifyingglass")
+                                .foregroundColor(.gray)
+                                .font(.system(size: userFontSize))
+                            
+                            TextField("Search journal entries or ask a question...", text: $commandBarText)
+                                .textFieldStyle(PlainTextFieldStyle())
+                                .font(.custom(userSelectedFont, size: userFontSize))
+                                .foregroundColor(colorScheme == .dark ? .white : .black)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(colorScheme == .dark ? Color.black : Color.white)
+                                .cornerRadius(4)
+                                .focused($isCommandBarFocused)
+                                .onChange(of: commandBarText) { newValue in
+                                    searchEntries(newValue)
+                                }
+                                .onSubmit {
+                                    // Enter key - select the highlighted entry
+                                    if selectedSearchIndex < searchResults.count {
+                                        let selectedResult = searchResults[selectedSearchIndex]
+                                        
+                                        // Save current entry before switching (like sidebar does)
+                                        if let currentId = selectedEntryId,
+                                           let currentEntry = entries.first(where: { $0.id == currentId }) {
+                                            saveEntry(entry: currentEntry)
+                                            updatePreviewText(for: currentEntry)
+                                        }
+                                        
+                                        // Select and load the entry (like sidebar does)
+                                        selectedEntryId = selectedResult.entry.id
+                                        loadEntry(entry: selectedResult.entry)
+                                    } else if selectedSearchIndex == searchResults.count {
+                                        // Handle "Ask Journal" action
+                                        runQuestionResponse(question: commandBarText)
+                                        return // Don't close command bar here, it's handled in runQuestionResponse
+                                    }
+                                    
+                                    // Close the command bar
+                                    withAnimation(.easeInOut(duration: 0.1)) {
+                                        showingCommandBar = false
+                                        commandBarText = ""
+                                        isCommandBarFocused = false
+                                        searchResults = []
+                                        selectedSearchIndex = 0
+                                    }
+                                }
+                                .onExitCommand {
+                                    withAnimation(.easeInOut(duration: 0.1)) {
+                                        showingCommandBar = false
+                                        commandBarText = ""
+                                        isCommandBarFocused = false
+                                        searchResults = []
+                                        selectedSearchIndex = 0
+                                    }
+                                }
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 16)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(colorScheme == .dark ? Color.black : Color.white)
+                                .shadow(color: Color.black.opacity(0.2), radius: 20, x: 0, y: 5)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(colorScheme == .dark ? Color.gray.opacity(0.3) : Color.gray.opacity(0.2), lineWidth: 1)
+                        )
+                        .frame(maxWidth: 600)
+                        .offset(y: -100) // Fix search bar position at center
+                        
+                        // Search results dropdown - positioned below search bar
+                        if !commandBarText.isEmpty {
+                            ScrollView {
+                                ScrollViewReader { proxy in
+                                    VStack(alignment: .leading, spacing: 0) {
+                                        ForEach(Array(searchResults.enumerated()), id: \.element.entry.id) { index, result in
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(result.entry.date)
+                                                .font(.custom(userSelectedFont, size: userFontSize * 0.8))
+                                                .foregroundColor(.gray)
+                                            
+                                            highlightedMatchText(result.matchContext, searchTerm: commandBarText)
+                                                .font(.custom(userSelectedFont, size: userFontSize * 0.9))
+                                                .foregroundColor(colorScheme == .dark ? .white : .black)
+                                                .lineLimit(2)
+                                        }
+                                        .padding(.horizontal, 20)
+                                        .padding(.vertical, 12)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(
+                                            index == selectedSearchIndex 
+                                                ? Color(red: 0.925, green: 0.925, blue: 0.925)
+                                                : Color.white
+                                        )
+                                        .onTapGesture {
+                                            // Save current entry before switching (like sidebar does)
+                                            if let currentId = selectedEntryId,
+                                               let currentEntry = entries.first(where: { $0.id == currentId }) {
+                                                saveEntry(entry: currentEntry)
+                                                updatePreviewText(for: currentEntry)
+                                            }
+                                            
+                                            // Select and load the entry (like sidebar does)
+                                            selectedEntryId = result.entry.id
+                                            loadEntry(entry: result.entry)
+                                            
+                                            withAnimation(.easeInOut(duration: 0.1)) {
+                                                showingCommandBar = false
+                                                commandBarText = ""
+                                                isCommandBarFocused = false
+                                                searchResults = []
+                                                selectedSearchIndex = 0
+                                            }
+                                        }
+                                        .id("search-result-\(index)")
+                                        
+                                        if result.entry.id != searchResults.last?.entry.id {
+                                            Divider()
+                                                .background(Color(red: 0.95, green: 0.95, blue: 0.95))
+                                        }
+                                    }
+                                    
+                                    // Always show "Ask Journal" entry at the bottom
+                                    if !searchResults.isEmpty {
+                                        Divider()
+                                            .background(Color(red: 0.95, green: 0.95, blue: 0.95))
+                                    }
+                                    
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("✨ Ask Journal")
+                                            .font(.custom(userSelectedFont, size: userFontSize * 0.8))
+                                            .foregroundColor(.gray)
+                                        
+                                        Text(commandBarText)
+                                            .font(.custom(userSelectedFont, size: userFontSize * 0.9))
+                                            .foregroundColor(colorScheme == .dark ? .white : .black)
+                                            .lineLimit(2)
+                                    }
+                                    .padding(.horizontal, 20)
+                                    .padding(.vertical, 12)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(
+                                        selectedSearchIndex == searchResults.count
+                                            ? Color(red: 0.925, green: 0.925, blue: 0.925)
+                                            : Color.white
+                                    )
+                                    .onTapGesture {
+                                        // Handle "Ask Journal" action here
+                                        runQuestionResponse(question: commandBarText)
+                                    }
+                                    .id("ask-journal-entry")
+                                }
+                                .onChange(of: selectedSearchIndex) { newIndex in
+                                    // Auto-scroll to keep selected item visible
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        if newIndex < searchResults.count {
+                                            proxy.scrollTo("search-result-\(newIndex)", anchor: .bottom)
+                                        } else {
+                                            proxy.scrollTo("ask-journal-entry", anchor: .bottom)
+                                        }
+                                    }
+                                    
+                                }
+                            }
+                        }
+                            .scrollIndicators(.hidden)
+                            .frame(maxWidth: 600, maxHeight: min(400, CGFloat(min(searchResults.count + 1, 8)) * 80))
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .background(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(Color(red: 0.8863, green: 0.8471, blue: 0.8078))
+                                    .shadow(color: Color.black.opacity(0.2), radius: 20, x: 0, y: 5)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(colorScheme == .dark ? Color.gray.opacity(0.3) : Color.gray.opacity(0.2), lineWidth: 1)
+                            )
+                            .offset(y: -25) // Position dropdown with more space below search bar
+                            .transition(.opacity)
+                        }
+                    }
+                    .transition(.opacity)
+                }
+            }
+        )
+        .overlay(
             // Toast Overlay
             toastOverlay
         )
         .onChange(of: reflectionViewModel.isLoading) { isLoading in
             if isLoading {
                 isUserEditorFocused = false
+            }
+        }
+        .onAppear {
+            NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                // Check for Command+K
+                if event.modifierFlags.contains(.command) && event.keyCode == 40 { // 40 is the keycode for 'k'
+                    withAnimation(.easeInOut(duration: 0.1)) {
+                        showingCommandBar.toggle()
+                        if showingCommandBar {
+                            commandBarText = ""
+                            searchResults = []
+                            selectedSearchIndex = 0
+                            // Delay focus slightly to ensure the view is visible
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                isCommandBarFocused = true
+                            }
+                        } else {
+                            isCommandBarFocused = false
+                            searchResults = []
+                            selectedSearchIndex = 0
+                        }
+                    }
+                    return nil // Consume the event
+                }
+                
+                // Handle arrow keys when command bar is open and focused
+                if showingCommandBar && isCommandBarFocused && !commandBarText.isEmpty {
+                    if event.keyCode == 125 { // Down arrow
+                        if selectedSearchIndex == searchResults.count {
+                            selectedSearchIndex = 0 // Wrap to first entry
+                        } else {
+                            selectedSearchIndex += 1
+                        }
+                        return nil // Consume the event
+                    } else if event.keyCode == 126 { // Up arrow
+                        if selectedSearchIndex == 0 {
+                            selectedSearchIndex = searchResults.count // Wrap to "Ask Journal" entry
+                        } else {
+                            selectedSearchIndex -= 1
+                        }
+                        return nil // Consume the event
+                    }
+                }
+                
+                return event
             }
         }
     }
@@ -1928,7 +2483,7 @@ struct ContentView: View {
                 if showReflectionPanel {
                     Divider()
                         .opacity(showReflectionPanel ? 1.0 : 0.0)
-                        .animation(.easeInOut(duration: 0.3), value: showReflectionPanel)
+                        .animation(.easeInOut(duration: 0.2), value: showReflectionPanel)
                 }
                 
                 // Right side - Reflection Panel
@@ -2107,17 +2662,37 @@ struct ContentView: View {
     
     @ViewBuilder
     private var sidebarEntriesList: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(entries) { entry in
-                    sidebarEntryRow(entry: entry)
-                    if entry.id != entries.last?.id {
-                        Divider()
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(entries) { entry in
+                        sidebarEntryRow(entry: entry)
+                            .id(entry.id)
+                        if entry.id != entries.last?.id {
+                            Divider()
+                        }
+                    }
+                    // Add bottom padding spacer with ID for scrolling to very bottom
+                    VStack { 
+                        Spacer().frame(height: 50)
+                    }
+                    .id("bottom-padding")
+                }
+            }
+            .scrollIndicators(.never)
+            .onChange(of: selectedEntryId) { newEntryId in
+                if let entryId = newEntryId {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        // If this is the last entry, scroll to bottom padding
+                        if entryId == entries.last?.id {
+                            proxy.scrollTo("bottom-padding", anchor: .bottom)
+                        } else {
+                            proxy.scrollTo(entryId, anchor: .center)
+                        }
                     }
                 }
             }
         }
-        .scrollIndicators(.never)
     }
     
     @ViewBuilder
@@ -2138,7 +2713,7 @@ struct ContentView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack {
-                        Text(entry.date)
+                        Text(entry.filename.hasPrefix("[Question]-") ? "Question" : entry.date)
                             .font(.system(size: 14))
                             .lineLimit(1)
                             .foregroundColor(.primary)
@@ -2323,6 +2898,43 @@ struct ContentView: View {
         }
     }
     
+    private func highlightedMatchText(_ text: String, searchTerm: String) -> Text {
+        if searchTerm.isEmpty {
+            return Text(text)
+        }
+        
+        // Create an AttributedString for inline highlighting
+        var attributedString = AttributedString(text)
+        
+        // Find all matches case-insensitively
+        let nsText = text as NSString
+        var searchRange = NSRange(location: 0, length: nsText.length)
+        
+        while searchRange.location < nsText.length {
+            let foundRange = nsText.range(of: searchTerm, options: .caseInsensitive, range: searchRange)
+            
+            if foundRange.location == NSNotFound {
+                break
+            }
+            
+            // Convert NSRange to AttributedString range
+            if let stringRange = Range(foundRange, in: text) {
+                let attrRange = AttributedString.Index(stringRange.lowerBound, within: attributedString)!..<AttributedString.Index(stringRange.upperBound, within: attributedString)!
+                
+                // Apply background color to the match with slightly rounded appearance
+                attributedString[attrRange].backgroundColor = Color.brown.opacity(0.35)
+                // Add slight padding effect by using a slightly darker background
+                attributedString[attrRange].foregroundColor = Color.primary
+            }
+            
+            // Move search range past this match
+            searchRange.location = foundRange.location + foundRange.length
+            searchRange.length = nsText.length - searchRange.location
+        }
+        
+        return Text(attributedString)
+    }
+    
     private func updatePreviewText(for entry: HumanEntry) {
         let documentsDirectory = getDocumentsDirectory()
         let fileURL = documentsDirectory.appendingPathComponent(entry.filename)
@@ -2364,6 +2976,24 @@ struct ContentView: View {
                     // Fallback: just show "Read entries" if regex fails
                     preview = "Read entries"
                 }
+            } 
+            // Special handling for question entries - show the question itself
+            else if entry.filename.hasPrefix("[Question]-") {
+                // Extract the question from the first USER section
+                if userRange.location != NSNotFound {
+                    let userStart = userRange.location + userRange.length
+                    let userContent: String
+                    
+                    if reflectionRange.location != NSNotFound && reflectionRange.location > userStart {
+                        userContent = (fullContent as NSString).substring(with: NSRange(location: userStart, length: reflectionRange.location - userStart))
+                    } else {
+                        userContent = (fullContent as NSString).substring(from: userStart)
+                    }
+                    
+                    preview = userContent
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .replacingOccurrences(of: "\n", with: " ")
+                }
             } else {
                 // For non-reflection entries, remove separators and clean up as before
                 preview = preview.replacingOccurrences(of: userSeparator, with: "")
@@ -2388,16 +3018,18 @@ struct ContentView: View {
         var contentToSave = ""
         
         // Ensure the latest USER section is updated with current editing text
-        // But skip the first USER section if it contains reflection summary text
+        // But skip the first USER section if this is a reflection or question entry
         let userIndices = sections.enumerated().compactMap { index, section in
             section.type == .user ? index : nil
         }
         
+        let isReflectionOrQuestion = entry.filename.hasPrefix("[Reflection]-") || entry.filename.hasPrefix("[Question]-")
+        
         if let lastUserIndex = userIndices.last, userIndices.count > 1 {
-            // Only update if there are multiple USER sections (skip the first one with "Read x entries")
+            // Only update if there are multiple USER sections (skip the first one for reflection/question entries)
             sections[lastUserIndex].text = editingText
-        } else if userIndices.count == 1, !sections[userIndices[0]].text.hasPrefix("Read ") {
-            // Only update if the single USER section doesn't start with "Read" (not a reflection summary)
+        } else if userIndices.count == 1, !isReflectionOrQuestion {
+            // Only update if this is not a reflection or question entry (preserve their initial content)
             sections[userIndices[0]].text = editingText
         }
         
@@ -2854,6 +3486,27 @@ struct ContentView: View {
             
             streamOpenAIResponse(apiKey: apiKey, entryText: combinedContent)
         }
+        
+        func startQuestionResponse(apiKey: String, allEntries: String, question: String, onComplete: @escaping () -> Void, onStream: ((String) -> Void)? = nil) {
+            guard !apiKey.isEmpty else {
+                self.error = "Please enter your OpenAI API key in Settings"
+                return
+            }
+            
+            guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                self.error = "Please provide a question."
+                return
+            }
+
+            self.reflectionResponse = ""
+            self.isLoading = true
+            self.error = nil
+            self.hasBeenRun = true
+            self.onComplete = onComplete
+            self.onStream = onStream
+            
+            streamQuestionResponse(apiKey: apiKey, allEntries: allEntries, question: question)
+        }
 
         private func streamOpenAIResponse(apiKey: String, entryText: String) {
             let endpoint = URL(string: "https://api.openai.com/v1/chat/completions")!
@@ -2935,6 +3588,49 @@ struct ContentView: View {
                     }
                 }
             }
+        }
+        
+        private func streamQuestionResponse(apiKey: String, allEntries: String, question: String) {
+            let endpoint = URL(string: "https://api.openai.com/v1/chat/completions")!
+            
+            var request = URLRequest(url: endpoint)
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            
+            let systemPrompt = """
+            below are my journal entries as well as my reflections on them. i will be asking a question and below is all the information you know about me. use this to answer the question.in your answer talk through it with me like a friend. don't therapize me and give me a whole breakdown, don't repeat my thoughts with headings. really take all of this, and answer the question as if you're an old homie.
+
+            keep it casual, dont say yo, help me make new connections i don't see, comfort, validate, challenge, all of it. dont be afraid to say a lot. format with headings if needed. use new paragrahs to make what you say more readable. don't use markdown or any other formatting. just use text.
+
+            do not just go through every single thing i say, and say it back to me. you need to process everything said, making connections i don't see it, and then use the relevant bits to answer the question
+
+            my entries: 
+            """
+            
+            let payload: [String: Any] = [
+                "model": "gpt-4o",
+                "messages": [
+                    ["role": "system", "content": systemPrompt],
+                    ["role": "system", "content": allEntries],
+                    ["role": "user", "content": question]
+                ],
+                "stream": true
+            ]
+            
+            do {
+                request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+            } catch {
+                DispatchQueue.main.async {
+                    self.isLoading = false
+                    self.error = "Failed to prepare request."
+                }
+                return
+            }
+            
+            let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+            streamingTask = session.dataTask(with: request)
+            streamingTask?.resume()
         }
         
         func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
@@ -3302,6 +3998,7 @@ struct APIKeysSettingsView: View {
 }
 
 struct ReflectionsSettingsView: View {
+    @Environment(\.colorScheme) var colorScheme
     @ObservedObject var settingsManager: SettingsManager
     let onRunWeek: (Date, Date) -> Void
     let onRunMonth: (Date, Date) -> Void
@@ -3377,6 +4074,15 @@ struct ReflectionsSettingsView: View {
                         Button("Run") {
                             onRunWeek(weekFromDate, weekToDate)
                         }
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(colorScheme == .dark ? Color.black : .primary)
+                        )
+                        .buttonStyle(PlainButtonStyle())
                     }
                 }
             }
@@ -3419,6 +4125,15 @@ struct ReflectionsSettingsView: View {
                         Button("Run") {
                             onRunMonth(monthFromDate, monthToDate)
                         }
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(colorScheme == .dark ? Color.black : .primary)
+                        )
+                        .buttonStyle(PlainButtonStyle())
                     }
                 }
             }
@@ -3461,6 +4176,15 @@ struct ReflectionsSettingsView: View {
                         Button("Run") {
                             onRunYear(yearFromDate, yearToDate)
                         }
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(colorScheme == .dark ? Color.black : .primary)
+                        )
+                        .buttonStyle(PlainButtonStyle())
                     }
                 }
             }
@@ -3503,6 +4227,15 @@ struct ReflectionsSettingsView: View {
                         Button("Run") {
                             onRunCustom(customFromDate, customToDate)
                         }
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(colorScheme == .dark ? Color.black : .primary)
+                        )
+                        .buttonStyle(PlainButtonStyle())
                         .disabled(customFromDate > customToDate)
                     }
                 }
