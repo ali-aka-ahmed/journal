@@ -332,10 +332,6 @@ struct ContentView: View {
     @State private var didCopyPrompt: Bool = false // Add state for copy prompt feedback
     @State private var showingSettings = false // Add state for settings menu
     @State private var isHoveringSettings = false // Add state for settings hover
-    @State private var showSidebarPopover = false // Popover for sidebar button
-    @State private var showFullscreenPopover = false // Popover for fullscreen button
-    @State private var sidebarHoverTimer: Timer? // Timer for sidebar popover delay
-    @State private var fullscreenHoverTimer: Timer? // Timer for fullscreen popover delay
     @State private var selectedSettingsTab: SettingsTab = .reflections // Add state for selected tab
     @State private var showingCommandBar = false // Add state for command bar
     @State private var commandBarText = "" // Add state for command bar text
@@ -1592,26 +1588,13 @@ struct ContentView: View {
                                 .foregroundColor(isHoveringClock ? textHoverColor : textColor)
                         }
                         .buttonStyle(.plain)
-                        .popover(isPresented: $showSidebarPopover, arrowEdge: .bottom) {
-                            Text("⌘T")
-                                .font(.caption)
-                                .padding(8)
-                        }
                         .onHover { hovering in
                             isHoveringClock = hovering
                             isHoveringBottomNav = hovering
                             if hovering {
                                 NSCursor.pointingHand.push()
-                                // Start timer for showing popover after 0.5 seconds
-                                sidebarHoverTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
-                                    showSidebarPopover = true
-                                }
                             } else {
                                 NSCursor.pop()
-                                // Cancel timer and hide popover
-                                sidebarHoverTimer?.invalidate()
-                                sidebarHoverTimer = nil
-                                showSidebarPopover = false
                             }
                         }
                         
@@ -1661,26 +1644,13 @@ struct ContentView: View {
                         }
                         .buttonStyle(.plain)
                         .foregroundColor(isHoveringFullscreen ? textHoverColor : textColor)
-                        .popover(isPresented: $showFullscreenPopover, arrowEdge: .bottom) {
-                            Text("⌘⇧F")
-                                .font(.caption)
-                                .padding(8)
-                        }
                         .onHover { hovering in
                             isHoveringFullscreen = hovering
                             isHoveringBottomNav = hovering
                             if hovering {
                                 NSCursor.pointingHand.push()
-                                // Start timer for showing popover after 0.5 seconds
-                                fullscreenHoverTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
-                                    showFullscreenPopover = true
-                                }
                             } else {
                                 NSCursor.pop()
-                                // Cancel timer and hide popover
-                                fullscreenHoverTimer?.invalidate()
-                                fullscreenHoverTimer = nil
-                                showFullscreenPopover = false
                             }
                         }
                         
