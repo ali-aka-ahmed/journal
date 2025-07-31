@@ -332,6 +332,10 @@ struct ContentView: View {
     @State private var didCopyPrompt: Bool = false // Add state for copy prompt feedback
     @State private var showingSettings = false // Add state for settings menu
     @State private var isHoveringSettings = false // Add state for settings hover
+    @State private var showSidebarPopover = false // Popover for sidebar button
+    @State private var showFullscreenPopover = false // Popover for fullscreen button
+    @State private var sidebarHoverTimer: Timer? // Timer for sidebar popover delay
+    @State private var fullscreenHoverTimer: Timer? // Timer for fullscreen popover delay
     @State private var selectedSettingsTab: SettingsTab = .reflections // Add state for selected tab
     @State private var showingCommandBar = false // Add state for command bar
     @State private var commandBarText = "" // Add state for command bar text
@@ -1588,13 +1592,26 @@ struct ContentView: View {
                                 .foregroundColor(isHoveringClock ? textHoverColor : textColor)
                         }
                         .buttonStyle(.plain)
+                        .popover(isPresented: $showSidebarPopover, arrowEdge: .bottom) {
+                            Text("⌘T")
+                                .font(.caption)
+                                .padding(8)
+                        }
                         .onHover { hovering in
                             isHoveringClock = hovering
                             isHoveringBottomNav = hovering
                             if hovering {
                                 NSCursor.pointingHand.push()
+                                // Start timer for showing popover after 0.5 seconds
+                                sidebarHoverTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
+                                    showSidebarPopover = true
+                                }
                             } else {
                                 NSCursor.pop()
+                                // Cancel timer and hide popover
+                                sidebarHoverTimer?.invalidate()
+                                sidebarHoverTimer = nil
+                                showSidebarPopover = false
                             }
                         }
                         
@@ -1644,13 +1661,26 @@ struct ContentView: View {
                         }
                         .buttonStyle(.plain)
                         .foregroundColor(isHoveringFullscreen ? textHoverColor : textColor)
+                        .popover(isPresented: $showFullscreenPopover, arrowEdge: .bottom) {
+                            Text("⌘⇧F")
+                                .font(.caption)
+                                .padding(8)
+                        }
                         .onHover { hovering in
                             isHoveringFullscreen = hovering
                             isHoveringBottomNav = hovering
                             if hovering {
                                 NSCursor.pointingHand.push()
+                                // Start timer for showing popover after 0.5 seconds
+                                fullscreenHoverTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
+                                    showFullscreenPopover = true
+                                }
                             } else {
                                 NSCursor.pop()
+                                // Cancel timer and hide popover
+                                fullscreenHoverTimer?.invalidate()
+                                fullscreenHoverTimer = nil
+                                showFullscreenPopover = false
                             }
                         }
                         
@@ -2282,17 +2312,10 @@ struct ContentView: View {
                                         }
                                         .id("search-result-\(index)")
                                         
-                                        if result.entry.id != searchResults.last?.entry.id {
-                                            Divider()
-                                                .background(Color(red: 0.95, green: 0.95, blue: 0.95))
-                                        }
-                                    }
-                                    
-                                    // Always show "Ask Journal" entry at the bottom
-                                    if !searchResults.isEmpty {
                                         Divider()
                                             .background(Color(red: 0.95, green: 0.95, blue: 0.95))
                                     }
+                                    
                                     
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text("✨ Ask Journal")
@@ -2383,6 +2406,33 @@ struct ContentView: View {
                     return nil // Consume the event
                 }
                 
+                // Check for Command+T (toggle sidebar)
+                if event.modifierFlags.contains(.command) && event.keyCode == 17 { // 17 is the keycode for 't'
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showingSidebar.toggle()
+                    }
+                    return nil // Consume the event
+                }
+                
+                // Check for Command+Shift+F (toggle fullscreen)
+                if event.modifierFlags.contains([.command, .shift]) && event.keyCode == 3 { // 3 is the keycode for 'f'
+                    if !isFullscreen {
+                        // Close sidebar first
+                        if showingSidebar {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showingSidebar = false
+                            }
+                        }
+                        // Then activate fullscreen after a brief delay
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            if let window = NSApplication.shared.windows.first {
+                                window.toggleFullScreen(nil)
+                            }
+                        }
+                    }
+                    return nil // Consume the event
+                }
+                
                 // Handle arrow keys when command bar is open and focused
                 if showingCommandBar && isCommandBarFocused && !commandBarText.isEmpty {
                     if event.keyCode == 125 { // Down arrow
@@ -2403,6 +2453,38 @@ struct ContentView: View {
                 }
                 
                 return event
+            }
+            
+            // Add notification listeners for menu commands
+            NotificationCenter.default.addObserver(
+                forName: NSNotification.Name("ToggleSidebar"),
+                object: nil,
+                queue: .main
+            ) { _ in
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showingSidebar.toggle()
+                }
+            }
+            
+            NotificationCenter.default.addObserver(
+                forName: NSNotification.Name("ToggleFullscreen"),
+                object: nil,
+                queue: .main
+            ) { _ in
+                if !isFullscreen {
+                    // Close sidebar first
+                    if showingSidebar {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showingSidebar = false
+                        }
+                    }
+                    // Then activate fullscreen after a brief delay
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        if let window = NSApplication.shared.windows.first {
+                            window.toggleFullScreen(nil)
+                        }
+                    }
+                }
             }
         }
     }
