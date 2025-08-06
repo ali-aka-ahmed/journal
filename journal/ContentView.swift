@@ -270,28 +270,189 @@ class OllamaManager: ObservableObject {
     @Published var isOllamaInstalled: Bool = true  // Assume installed initially
     
     private let baseURL = "http://localhost:11434"
-    private var serverProcess: Process?
+    internal var serverProcess: Process?
     private var pullTask: URLSessionDataTask?
     var streamBuffer = ""
     weak var settingsManager: SettingsManager?
     
     // Check if Ollama is installed
     func checkOllamaInstalled() -> Bool {
-        let fileManager = FileManager.default
-        // Check common installation paths
+        let installed = findOllamaExecutable() != nil
+        print("🔍 Checking if Ollama is installed: \(installed ? "✅ Found" : "❌ Not found")")
+        return installed
+    }
+    
+    // Check if Ollama server is running
+    func checkServerStatus(completion: @escaping (Bool) -> Void) {
+        print("🔍 Checking Ollama server status...")
+        
+        // First check if Ollama is installed
+        let installed = checkOllamaInstalled()
+        DispatchQueue.main.async {
+            self.isOllamaInstalled = installed
+        }
+        
+        guard installed else {
+            print("❌ Ollama not installed, server cannot be running")
+            DispatchQueue.main.async {
+                self.isServerRunning = false
+                completion(false)
+            }
+            return
+        }
+        
+        let url = URL(string: "\(baseURL)/api/tags")!
+        print("🔗 Testing connection to: \(url)")
+        
+        let task = URLSession.shared.dataTask(with: url) { data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    print("❌ Connection error: \(error.localizedDescription)")
+                    self.isServerRunning = false
+                    completion(false)
+                } else if let httpResponse = response as? HTTPURLResponse {
+                    print("📡 HTTP Response: \(httpResponse.statusCode)")
+                    if httpResponse.statusCode == 200 {
+                        print("✅ Ollama server is running and responding")
+                        self.isServerRunning = true
+                        completion(true)
+                    } else {
+                        print("❌ Ollama server returned status code: \(httpResponse.statusCode)")
+                        self.isServerRunning = false
+                        completion(false)
+                    }
+                } else {
+                    print("❌ No HTTP response received")
+                    self.isServerRunning = false
+                    completion(false)
+                }
+            }
+        }
+        task.resume()
+    }
+    
+    // Start Ollama server
+    func startServer(completion: @escaping (Bool, String?) -> Void) {
+        print("🟡 Starting Ollama server...")
+        
+        // First check if it's already running
+        checkServerStatus { isRunning in
+            if isRunning {
+                print("✅ Ollama server is already running")
+                completion(true, nil)
+                return
+            }
+            
+            print("🟡 Server not running, attempting to start...")
+            
+            // Check if port 11434 is already in use
+            if self.isPortInUse(11434) {
+                let error = "Port 11434 is already in use by another process. Please stop the conflicting process or restart your system."
+                print("❌ \(error)")
+                completion(false, error)
+                return
+            }
+            
+            // Find Ollama executable
+            guard let ollamaPath = self.findOllamaExecutable() else {
+                let error = "Ollama executable not found in common paths"
+                print("❌ \(error)")
+                completion(false, error)
+                return
+            }
+            
+            print("🟢 Found Ollama at: \(ollamaPath)")
+            
+            // Try to start the server
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: ollamaPath)
+            process.arguments = ["serve"]
+            
+            // Use default environment (network entitlements handle binding)
+            process.environment = ProcessInfo.processInfo.environment
+            
+            // Capture output for debugging
+            let outputPipe = Pipe()
+            let errorPipe = Pipe()
+            process.standardOutput = outputPipe
+            process.standardError = errorPipe
+            
+            do {
+                print("🟡 Launching: \(ollamaPath) serve")
+                process.launch()  // Use launch() instead of run() for non-blocking execution
+                self.serverProcess = process
+                
+                print("🟡 Process launched with PID: \(process.processIdentifier)")
+                print("🟡 Server starting in background...")
+                
+                // Return immediately to avoid blocking UI
+                completion(true, nil)
+                
+                // Check server health asynchronously after a brief delay
+                DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 2.0) {
+                    self.checkServerHealth()
+                }
+                
+            } catch {
+                let errorMsg = "Failed to launch Ollama: \(error.localizedDescription)"
+                print("❌ \(errorMsg)")
+                print("📝 Error details: \(error)")
+                completion(false, errorMsg)
+            }
+        }
+    }
+    
+    // Helper function to check if port is already in use
+    private func isPortInUse(_ port: Int) -> Bool {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/lsof")
+        task.arguments = ["-i", ":\(port)", "-sTCP:LISTEN"]
+        
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+        
+        do {
+            try task.run()
+            task.waitUntilExit()
+            
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8) ?? ""
+            
+            // If lsof finds processes using the port, output will not be empty
+            let isInUse = !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            
+            if isInUse {
+                print("⚠️ Port \(port) is already in use:")
+                print(output)
+            } else {
+                print("✅ Port \(port) is available")
+            }
+            
+            return isInUse
+        } catch {
+            print("📝 Failed to check port status: \(error)")
+            return false
+        }
+    }
+    
+    // Helper function to find Ollama executable
+    private func findOllamaExecutable() -> String? {
         let paths = [
             "/usr/local/bin/ollama",
             "/opt/homebrew/bin/ollama",
-            "/usr/bin/ollama"
+            "/usr/bin/ollama",
+            "/bin/ollama"
         ]
         
+        // Check common installation paths
         for path in paths {
-            if fileManager.fileExists(atPath: path) {
-                return true
+            if FileManager.default.fileExists(atPath: path) {
+                return path
             }
         }
         
-        // Also check if ollama is in PATH
+        // Try using 'which' command to find in PATH
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
         process.arguments = ["ollama"]
@@ -305,79 +466,68 @@ class OllamaManager: ObservableObject {
             process.waitUntilExit()
             
             if process.terminationStatus == 0 {
-                return true
-            }
-        } catch {
-            // Process failed to run
-        }
-        
-        return false
-    }
-    
-    // Check if Ollama server is running
-    func checkServerStatus(completion: @escaping (Bool) -> Void) {
-        // First check if Ollama is installed
-        let installed = checkOllamaInstalled()
-        DispatchQueue.main.async {
-            self.isOllamaInstalled = installed
-        }
-        
-        guard installed else {
-            DispatchQueue.main.async {
-                self.isServerRunning = false
-                completion(false)
-            }
-            return
-        }
-        
-        let url = URL(string: "\(baseURL)/api/tags")!
-        
-        let task = URLSession.shared.dataTask(with: url) { data, response, error in
-            DispatchQueue.main.async {
-                if let httpResponse = response as? HTTPURLResponse,
-                   httpResponse.statusCode == 200 {
-                    self.isServerRunning = true
-                    completion(true)
-                } else {
-                    self.isServerRunning = false
-                    completion(false)
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                if let path = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !path.isEmpty {
+                    return path
                 }
             }
+        } catch {
+            print("📝 Failed to run 'which ollama': \(error)")
         }
-        task.resume()
+        
+        return nil
     }
     
-    // Start Ollama server
-    func startServer(completion: @escaping (Bool, String?) -> Void) {
-        // First check if it's already running
+    // Asynchronous server health check that doesn't block UI
+    private func checkServerHealth(retryCount: Int = 0, maxRetries: Int = 10) {
+        let retryDelay = min(2.0 + Double(retryCount) * 0.5, 10.0) // Exponential backoff, max 10s
+        
         checkServerStatus { isRunning in
-            if isRunning {
-                completion(true, nil)
-                return
-            }
-            
-            // Try to start the server
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/local/bin/ollama")
-            process.arguments = ["serve"]
-            
-            do {
-                try process.run()
-                self.serverProcess = process
-                
-                // Wait a bit for server to start
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    self.checkServerStatus { isRunning in
-                        if isRunning {
-                            completion(true, nil)
+            DispatchQueue.main.async {
+                if isRunning {
+                    print("✅ Ollama server is healthy and responding!")
+                    self.isServerRunning = true
+                    // Optionally fetch available models
+                    self.fetchAvailableModels { _ in }
+                } else if retryCount < maxRetries {
+                    print("🔄 Server not ready yet, retrying in \(retryDelay)s... (attempt \(retryCount + 1)/\(maxRetries))")
+                    
+                    DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + retryDelay) {
+                        self.checkServerHealth(retryCount: retryCount + 1, maxRetries: maxRetries)
+                    }
+                } else {
+                    print("❌ Server failed to start after \(maxRetries) attempts")
+                    self.isServerRunning = false
+                    
+                    // Check if process is still running for diagnostics
+                    if let process = self.serverProcess {
+                        if process.isRunning {
+                            print("📝 Process is running but not responding to API calls")
                         } else {
-                            completion(false, "Ollama server failed to start")
+                            let exitCode = process.terminationStatus
+                            print("📝 Process has terminated, exit code: \(exitCode)")
+                            print("💡 \(self.getOllamaErrorMessage(exitCode: exitCode))")
                         }
                     }
                 }
-            } catch {
-                completion(false, "Failed to launch Ollama: \(error.localizedDescription)")
             }
+        }
+    }
+    
+    // Helper function to provide specific error messages based on exit codes
+    private func getOllamaErrorMessage(exitCode: Int32) -> String {
+        switch exitCode {
+        case 1:
+            return "Ollama server failed to start (exit code 1). This is often caused by port binding issues or configuration problems. The OLLAMA_HOST fix should resolve this. If the problem persists, try restarting your system or manually running 'ollama serve' in Terminal to see detailed error messages."
+        case 126:
+            return "Ollama executable found but cannot be executed (exit code 126). This may be a permissions issue. Try running 'chmod +x \(findOllamaExecutable() ?? "/path/to/ollama")' in Terminal."
+        case 127:
+            return "Ollama command not found (exit code 127). Please ensure Ollama is properly installed from https://ollama.com"
+        case 130:
+            return "Ollama server was interrupted (exit code 130). This usually happens when the process receives a termination signal."
+        default:
+            return "Ollama server failed with exit code \(exitCode). Try running 'ollama serve' manually in Terminal to see detailed error messages, or restart your system if the problem persists."
         }
     }
     
@@ -420,6 +570,7 @@ class OllamaManager: ObservableObject {
             if retries > 0 {
                 self.startServer { success, error in
                     if success {
+                        // Server launch initiated successfully (non-blocking)
                         completion(true, nil)
                     } else {
                         // Retry with exponential backoff
@@ -435,6 +586,72 @@ class OllamaManager: ObservableObject {
         }
     }
     
+    // Stop the Ollama server
+    func stopServer() {
+        guard let process = serverProcess else {
+            print("🔴 No Ollama server process to stop")
+            return
+        }
+        
+        print("🔴 Stopping Ollama server (PID: \(process.processIdentifier))...")
+        
+        // First try gentle termination
+        process.terminate()
+        
+        // Wait a moment for graceful shutdown
+        DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 2.0) {
+            if process.isRunning {
+                print("⚠️ Process still running, forcing termination...")
+                // Force kill if still running
+                kill(process.processIdentifier, SIGKILL)
+            } else {
+                print("✅ Ollama server stopped gracefully")
+            }
+        }
+        
+        serverProcess = nil
+        DispatchQueue.main.async {
+            self.isServerRunning = false
+        }
+        print("🔴 Ollama server cleanup completed")
+    }
+    
+    // Force stop with immediate termination
+    func forceStopServer() {
+        guard let process = serverProcess else { return }
+        
+        print("💥 Force stopping Ollama server (PID: \(process.processIdentifier))")
+        kill(process.processIdentifier, SIGKILL)
+        
+        serverProcess = nil
+        DispatchQueue.main.async {
+            self.isServerRunning = false
+        }
+        print("💥 Ollama server force stopped")
+    }
+    
+    // Reset all OllamaManager state (useful when switching configurations)
+    func resetState() {
+        print("🔄 Resetting OllamaManager state")
+        
+        // Cancel any ongoing pull task
+        pullTask?.cancel()
+        pullTask = nil
+        
+        // Reset pull-related state
+        isPulling = false
+        pullProgress = ""
+        pullPercentage = 0.0
+        
+        // Clear models list
+        availableModels = []
+        
+        // Clear stream buffer
+        streamBuffer = ""
+        
+        print("✅ OllamaManager state reset complete")
+    }
+    
     // Pull a model from Ollama
     func pullModel(_ modelName: String) async {
         guard !isPulling else { 
@@ -443,6 +660,7 @@ class OllamaManager: ObservableObject {
         }
         
         print("🟢 Starting pull for model: \(modelName)")
+        print("🌐 Base URL: \(baseURL)")
         
         await MainActor.run {
             self.isPulling = true
@@ -506,23 +724,32 @@ class OllamaStreamDelegate: NSObject, URLSessionDataDelegate {
             return 
         }
         
+        print("📡 RECEIVED DATA CHUNK: \(data.count) bytes")
+        
         // Append data to buffer
         if let string = String(data: data, encoding: .utf8) {
+            print("📝 RAW STRING CHUNK: '\(string)'")
             manager.streamBuffer += string
+            print("📦 CURRENT BUFFER: '\(manager.streamBuffer)'")
             
             // Process complete lines
             let lines = manager.streamBuffer.components(separatedBy: "\n")
+            print("📋 SPLIT INTO \(lines.count) LINES")
             
             for i in 0..<lines.count - 1 {
                 let line = lines[i].trimmingCharacters(in: .whitespacesAndNewlines)
                 if !line.isEmpty {
+                    print("🔄 PROCESSING LINE \(i): '\(line)'")
                     processJSONLine(line)
                 } else {
+                    print("⚪ EMPTY LINE \(i) SKIPPED")
                 }
             }
             
             // Keep the incomplete line in buffer
-            manager.streamBuffer = lines.last ?? ""
+            let remainingBuffer = lines.last ?? ""
+            print("💾 REMAINING IN BUFFER: '\(remainingBuffer)'")
+            manager.streamBuffer = remainingBuffer
         } else {
             print("🔴 Failed to convert data to UTF-8 string")
         }
@@ -535,7 +762,15 @@ class OllamaStreamDelegate: NSObject, URLSessionDataDelegate {
         
         DispatchQueue.main.async {
             if let error = error {
-                manager.pullProgress = "Error: \(error.localizedDescription)"
+                // Handle connection errors appropriately
+                let nsError = error as NSError
+                if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCannotConnectToHost {
+                    manager.pullProgress = "Error: Cannot connect to Ollama server"
+                    print("🔴 Pull failed - server not running: \(error.localizedDescription)")
+                } else {
+                    manager.pullProgress = "Error: \(error.localizedDescription)"
+                    print("🔴 Pull failed: \(error.localizedDescription)")
+                }
                 manager.isPulling = false
             } else {
                 // Process any remaining data in buffer
@@ -559,21 +794,40 @@ class OllamaStreamDelegate: NSObject, URLSessionDataDelegate {
     }
     
     private func processJSONLine(_ line: String) {
+        print("🔍 RAW LINE RECEIVED: '\(line)'")
+        
         guard let manager = manager,
               let data = line.data(using: .utf8) else { 
+            print("🔴 Failed to get manager or convert line to data")
             return 
         }
         
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { 
+            print("🔴 Failed to parse JSON from line: '\(line)'")
             return 
         }
         
+        print("📊 PARSED JSON: \(json)")
+        
         DispatchQueue.main.async {
             if let status = json["status"] as? String {
+                print("✅ Status found: '\(status)'")
+                
+                // Log all available fields
+                if let digest = json["digest"] as? String {
+                    print("🔑 Digest: \(digest)")
+                }
+                if let total = json["total"] as? Int {
+                    print("📏 Total: \(total)")
+                }
+                if let completed = json["completed"] as? Int {
+                    print("✨ Completed: \(completed)")
+                }
                 
                 // Handle different status types
                 switch status {
                 case "success":
+                    print("🎉 SUCCESS: Download complete")
                     manager.isPulling = false
                     manager.pullProgress = ""
                     manager.pullPercentage = 0.0
@@ -591,49 +845,73 @@ class OllamaStreamDelegate: NSObject, URLSessionDataDelegate {
                     }
                     
                 case "pulling manifest":
+                    print("📄 PULLING MANIFEST")
                     manager.pullProgress = "Pulling manifest"
                     manager.pullPercentage = 0.0
                     
                 case "verifying sha256 digest":
+                    print("🔐 VERIFYING DIGEST")
                     manager.pullProgress = "Verifying download"
                     manager.pullPercentage = 95.0
                     
                 case "writing manifest":
+                    print("💾 WRITING MANIFEST")
                     manager.pullProgress = "Writing manifest"
                     manager.pullPercentage = 98.0
                     
                 case "removing any unused layers":
+                    print("🧹 CLEANING UP")
                     manager.pullProgress = "Cleaning up"
                     manager.pullPercentage = 99.0
                     
                 case let status where status.starts(with: "downloading") || status.starts(with: "pulling"):
+                    print("⬇️ DOWNLOAD/PULL STATUS: '\(status)'")
+                    
                     // Extract progress from downloading/pulling status
                     if let total = json["total"] as? Int,
                        let completed = json["completed"] as? Int {
+                        print("📊 Progress data - Total: \(total), Completed: \(completed)")
+                        
                         self.totalBytes = total
                         self.completedBytes = completed
                         let percentage = total > 0 ? (Double(completed) / Double(total)) * 100 : 0
-                        manager.pullPercentage = min(percentage, 90.0) // Cap at 90% for download phase
+                        let cappedPercentage = min(percentage, 90.0) // Cap at 90% for download phase
+                        
+                        print("🔢 Calculated percentage: \(percentage)% -> Capped: \(cappedPercentage)%")
+                        manager.pullPercentage = cappedPercentage
                         
                         // Extract digest for better progress message
                         if let digest = json["digest"] as? String {
                             let shortDigest = String(digest.prefix(12))
                             manager.pullProgress = "Pulling \(shortDigest)"
+                            print("🏷️ Updated progress message to: 'Pulling \(shortDigest)'")
                         } else {
                             manager.pullProgress = "Downloading model"
+                            print("🏷️ Updated progress message to: 'Downloading model'")
                         }
+                        
+                        print("📈 UI UPDATED - Progress: '\(manager.pullProgress)', Percentage: \(manager.pullPercentage)%")
+                        
                     } else {
+                        print("⚠️ No progress data found in download/pull status")
+                        print("   - total field: \(json["total"] ?? "missing")")
+                        print("   - completed field: \(json["completed"] ?? "missing")")
+                        
                         // Fallback for downloading/pulling status without progress data
                         manager.pullProgress = "Downloading model"
+                        print("🏷️ Fallback: Updated progress message to: 'Downloading model'")
                     }
                     
                 default:
+                    print("❓ OTHER STATUS: '\(status)'")
                     // For other statuses, just show the capitalized status
                     let capitalizedStatus = self.capitalizeFirstWord(status)
                     manager.pullProgress = capitalizedStatus
+                    print("🏷️ Updated progress message to: '\(capitalizedStatus)'")
                 }
             } else {
                 print("⚠️ No status field in JSON response")
+                print("📋 Available keys: \(Array(json.keys))")
             }
         }
     }
@@ -800,6 +1078,56 @@ struct ContentView: View {
         return KeychainHelper.shared.loadAPIKey(for: .openAI)
     }
     
+    /// Checks if LLM is properly configured based on the current mode (local or remote)
+    /// Returns a tuple with configuration status and an optional error message
+    private func isLLMConfigured() -> (isConfigured: Bool, errorMessage: String?) {
+        if settingsManager.settings.llmMode == "local" {
+            // For local mode, check if a model is selected
+            guard let selectedModel = settingsManager.settings.selectedOllamaModel,
+                  !selectedModel.isEmpty else {
+                return (false, "Setup your LLM :)")
+            }
+            
+            // Check if the selected model is available
+            if OllamaManager.shared.availableModels.isEmpty {
+                // If models list is empty, we need to fetch it first
+                return (false, "Setup your LLM :)")
+            }
+            
+            if !OllamaManager.shared.availableModels.contains(selectedModel) {
+                return (false, "Selected model '\(selectedModel)' is not available")
+            }
+            
+            return (true, nil)
+        } else {
+            // For remote mode, check if OpenAI API key exists
+            guard let apiKey = getOpenAIKeyFromKeychain(),
+                  !apiKey.isEmpty else {
+                return (false, "Setup your LLM :)")
+            }
+            return (true, nil)
+        }
+    }
+    
+    /// Asynchronously checks if local models are available and updates the models list
+    private func checkLocalModelAvailability(completion: @escaping (Bool) -> Void) {
+        if settingsManager.settings.llmMode == "local" {
+            OllamaManager.shared.fetchAvailableModels { models in
+                DispatchQueue.main.async {
+                    if let selectedModel = self.settingsManager.settings.selectedOllamaModel {
+                        completion(models.contains(selectedModel))
+                    } else {
+                        completion(false)
+                    }
+                }
+            }
+        } else {
+            // For remote mode, just check API key
+            let hasKey = getOpenAIKeyFromKeychain() != nil && !getOpenAIKeyFromKeychain()!.isEmpty
+            completion(hasKey)
+        }
+    }
+    
     
     private func buildFullConversationContext() -> String {
         var context = ""
@@ -873,15 +1201,36 @@ struct ContentView: View {
     
     // Function to run date range reflection (replaces runWeeklyReflection)
     private func runDateRangeReflection(fromDate: Date, toDate: Date, type: String) {
-        // Load OpenAI API key from keychain when user clicks reflect
-        guard let apiKey = getOpenAIKeyFromKeychain(), !apiKey.isEmpty else {
-            showToast(message: "OpenAI API key not configured in Settings", type: .error)
+        // Check if LLM is properly configured based on current mode
+        let llmConfig = isLLMConfigured()
+        if !llmConfig.isConfigured {
+            // If in local mode and models haven't been fetched yet, try fetching them first
+            if settingsManager.settings.llmMode == "local" && OllamaManager.shared.availableModels.isEmpty {
+                checkLocalModelAvailability { isConfigured in
+                    if isConfigured {
+                        // Retry the reflection now that models are loaded
+                        self.runDateRangeReflection(fromDate: fromDate, toDate: toDate, type: type)
+                    } else {
+                        self.showToast(message: llmConfig.errorMessage ?? "setup your LLM :)", type: .error)
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            self.showingSettings = true
+                            self.selectedSettingsTab = .apiKeys
+                        }
+                    }
+                }
+                return
+            }
+            
+            showToast(message: llmConfig.errorMessage ?? "setup your LLM :)", type: .error)
             withAnimation(.easeInOut(duration: 0.2)) {
                 showingSettings = true
                 selectedSettingsTab = .apiKeys
             }
             return
         }
+        
+        // Get API key for remote mode, or empty string for local mode
+        let apiKey = settingsManager.settings.llmMode == "remote" ? (getOpenAIKeyFromKeychain() ?? "") : ""
         
         // Gather entries from the specified date range
         let rangeContent = gatherEntriesInDateRange(from: fromDate, to: toDate)
@@ -998,15 +1347,56 @@ struct ContentView: View {
     
     // Function to run question response
     private func runQuestionResponse(question: String) {
-        // Load OpenAI API key from keychain
-        guard let apiKey = getOpenAIKeyFromKeychain(), !apiKey.isEmpty else {
-            showToast(message: "OpenAI API key not configured in Settings", type: .error)
+        // Check if LLM is properly configured based on current mode
+        let llmConfig = isLLMConfigured()
+        if !llmConfig.isConfigured {
+            // If in local mode and models haven't been fetched yet, try fetching them first
+            if settingsManager.settings.llmMode == "local" && OllamaManager.shared.availableModels.isEmpty {
+                checkLocalModelAvailability { isConfigured in
+                    if isConfigured {
+                        // Retry the question now that models are loaded
+                        self.runQuestionResponse(question: question)
+                    } else {
+                        self.showToast(message: llmConfig.errorMessage ?? "setup your LLM :)", type: .error)
+                        
+                        // Close command bar first before opening settings
+                        withAnimation(.easeInOut(duration: 0.1)) {
+                            self.showingCommandBar = false
+                            self.commandBarText = ""
+                            self.isCommandBarFocused = false
+                            self.searchResults = []
+                            self.selectedSearchIndex = 0
+                        }
+                        
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            self.showingSettings = true
+                            self.selectedSettingsTab = .apiKeys
+                        }
+                    }
+                }
+                return
+            }
+            
+            showToast(message: llmConfig.errorMessage ?? "setup your LLM :)", type: .error)
+            
+            // Close command bar first before opening settings
+            withAnimation(.easeInOut(duration: 0.1)) {
+                showingCommandBar = false
+                commandBarText = ""
+                isCommandBarFocused = false
+                searchResults = []
+                selectedSearchIndex = 0
+            }
+            
             withAnimation(.easeInOut(duration: 0.2)) {
                 showingSettings = true
                 selectedSettingsTab = .apiKeys
             }
             return
         }
+        
+        // Get API key for remote mode, or empty string for local mode
+        let apiKey = settingsManager.settings.llmMode == "remote" ? (getOpenAIKeyFromKeychain() ?? "") : ""
         
         guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             showToast(message: "Please enter a question", type: .error)
@@ -1024,6 +1414,15 @@ struct ContentView: View {
         // Check if there are any entries
         if allContent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             showToast(message: "No journal entries found", type: .error)
+            
+            // Close command bar when no entries are found
+            withAnimation(.easeInOut(duration: 0.1)) {
+                showingCommandBar = false
+                commandBarText = ""
+                isCommandBarFocused = false
+                searchResults = []
+                selectedSearchIndex = 0
+            }
             return
         }
         
@@ -2129,15 +2528,34 @@ struct ContentView: View {
                             }
                             
                             Button(action: {
-                                // Load OpenAI API key from keychain when user clicks reflect
-                                guard let apiKey = getOpenAIKeyFromKeychain(), !apiKey.isEmpty else {
-                                    showToast(message: "OpenAI API key not configured in Settings", type: .error)
+                                // Check if LLM is properly configured based on current mode
+                                let llmConfig = isLLMConfigured()
+                                if !llmConfig.isConfigured {
+                                    // If in local mode and models haven't been fetched yet, try fetching them first
+                                    if settingsManager.settings.llmMode == "local" && OllamaManager.shared.availableModels.isEmpty {
+                                        checkLocalModelAvailability { isConfigured in
+                                            if !isConfigured {
+                                                self.showToast(message: llmConfig.errorMessage ?? "setup your LLM :)", type: .error)
+                                                withAnimation(.easeInOut(duration: 0.2)) {
+                                                    self.showingSettings = true
+                                                    self.selectedSettingsTab = .apiKeys
+                                                }
+                                            }
+                                            // Note: We don't retry here because button clicks should be explicit
+                                        }
+                                        return
+                                    }
+                                    
+                                    showToast(message: llmConfig.errorMessage ?? "setup your LLM :)", type: .error)
                                     withAnimation(.easeInOut(duration: 0.2)) {
                                         showingSettings = true
                                         selectedSettingsTab = .apiKeys
                                     }
                                     return
                                 }
+                                
+                                // Get API key for remote mode, or empty string for local mode
+                                let apiKey = settingsManager.settings.llmMode == "remote" ? (getOpenAIKeyFromKeychain() ?? "") : ""
                                 
                                 if editingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                     showToast(message: "Empty! Write something and try again.", type: .error)
@@ -4019,7 +4437,7 @@ struct ContentView: View {
             let systemPrompt = """
             below are my journal entries as well as my reflections on them. wyt? talk through it with me like a friend. don't therapize me and give me a whole breakdown, don't repeat my thoughts with headings. really take all of this, and tell me back stuff truly as if you're an old homie.
 
-            Keep it casual, dont say yo, help me make new connections i don't see, comfort, validate, challenge, all of it. dont be afraid to say a lot. format with headings if needed. use new paragrahs to make what you say more readable.
+            Keep it casual, don't say yo, help me make new connections i don't see, comfort, validate, challenge, all of it. dont be afraid to say a lot. format with headings if needed. use new paragrahs to make what you say more readable.
 
             do not just go through every single thing i say, and say it back to me. you need to process everything i say, make connections i don't see it, and deliver it all back to me as a story that makes me feel what you think i wanna feel. thats what the best therapists do.
 
@@ -4066,7 +4484,7 @@ struct ContentView: View {
             let systemPrompt = """
             below are my journal entries as well as my reflections on them. wyt? talk through it with me like a friend. don't therapize me and give me a whole breakdown, don't repeat my thoughts with headings. really take all of this, and tell me back stuff truly as if you're an old homie.
 
-            Keep it casual, dont say yo, help me make new connections i don't see, comfort, validate, challenge, all of it. dont be afraid to say a lot. format with headings if needed. use new paragrahs to make what you say more readable.
+            Keep it casual, don't say yo, help me make new connections i don't see, comfort, validate, challenge, all of it. dont be afraid to say a lot. format with headings if needed. use new paragrahs to make what you say more readable.
 
             do not just go through every single thing i say, and say it back to me. you need to process everything i say, make connections i don't see it, and deliver it all back to me as a story that makes me feel what you think i wanna feel. thats what the best therapists do.
 
@@ -4307,7 +4725,7 @@ struct ContentView: View {
             let systemPrompt = """
             below are my journal entries as well as my reflections on them. i will be asking a question and below is all the information you know about me. use this to answer the question.in your answer talk through it with me like a friend. don't therapize me and give me a whole breakdown, don't repeat my thoughts with headings. really take all of this, and answer the question as if you're an old homie.
 
-            keep it casual, dont say yo, help me make new connections i don't see, comfort, validate, challenge, all of it. dont be afraid to say a lot. format with headings if needed. use new paragrahs to make what you say more readable.
+            keep it casual, don't say yo, help me make new connections i don't see, comfort, validate, challenge, all of it. dont be afraid to say a lot. format with headings if needed. use new paragrahs to make what you say more readable.
 
             do not just go through every single thing i say, and say it back to me. you need to process everything said, making connections i don't see it, and then use the relevant bits to answer the question
 
@@ -4351,7 +4769,7 @@ struct ContentView: View {
             let systemPrompt = """
             below are my journal entries as well as my reflections on them. i will be asking a question and below is all the information you know about me. use this to answer the question.in your answer talk through it with me like a friend. don't therapize me and give me a whole breakdown, don't repeat my thoughts with headings. really take all of this, and answer the question as if you're an old homie.
 
-            keep it casual, dont say yo, help me make new connections i don't see, comfort, validate, challenge, all of it. dont be afraid to say a lot. format with headings if needed. use new paragrahs to make what you say more readable.
+            keep it casual, don't say yo, help me make new connections i don't see, comfort, validate, challenge, all of it. dont be afraid to say a lot. format with headings if needed. use new paragrahs to make what you say more readable.
 
             do not just go through every single thing i say, and say it back to me. you need to process everything said, making connections i don't see it, and then use the relevant bits to answer the question
 
@@ -4627,6 +5045,410 @@ struct SettingsContent: View {
     }
 }
 
+// Separate component for Local configuration UI
+struct LocalConfigurationView: View {
+    @ObservedObject var settingsManager: SettingsManager
+    @StateObject private var ollamaManager = OllamaManager.shared
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Powered by Ollama. 100% private.")
+                .font(.system(size: 13))
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 24)
+            
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Model")
+                    .font(.system(size: 13))
+                    .foregroundColor(.primary)
+                    .padding(.horizontal, 24)
+                
+                ModelSelectionMenu(settingsManager: settingsManager, ollamaManager: ollamaManager)
+                
+                OllamaStatusView(ollamaManager: ollamaManager)
+            }
+        }
+        .frame(maxWidth: 400)
+    }
+}
+
+// Model selection dropdown component
+struct ModelSelectionMenu: View {
+    @ObservedObject var settingsManager: SettingsManager
+    @ObservedObject var ollamaManager: OllamaManager
+    
+    var body: some View {
+        Menu {
+            ForEach(ollamaManager.availableModels, id: \.self) { model in
+                Button(action: {
+                    settingsManager.settings.selectedOllamaModel = model
+                    settingsManager.saveSettings()
+                }) {
+                    Label(model, systemImage: settingsManager.settings.selectedOllamaModel == model ? "checkmark" : "")
+                }
+            }
+        } label: {
+            HStack {
+                Text(ollamaManager.availableModels.isEmpty ? "No models detected" : (settingsManager.settings.selectedOllamaModel ?? "Select a model"))
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundColor(.primary)
+                    .allowsHitTesting(false)
+                Spacer()
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                    .allowsHitTesting(false)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.gray.opacity(0.5), lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PlainButtonStyle())
+        .menuStyle(.button)
+        .onHover { isHovering in
+            DispatchQueue.main.async {
+                if isHovering {
+                    NSCursor.pointingHand.set()
+                } else {
+                    NSCursor.arrow.set()
+                }
+            }
+        }
+        .padding(.horizontal, 24)
+    }
+}
+
+// Ollama status and installation view
+struct OllamaStatusView: View {
+    @ObservedObject var ollamaManager: OllamaManager
+    
+    var body: some View {
+        VStack {
+            if ollamaManager.isPulling || !ollamaManager.isOllamaInstalled || !ollamaManager.availableModels.contains("smollm2:latest") {
+                if !ollamaManager.isOllamaInstalled {
+                    OllamaNotInstalledView(ollamaManager: ollamaManager)
+                } else if !ollamaManager.availableModels.contains("smollm2:latest") {
+                    ModelInstallView(ollamaManager: ollamaManager)
+                }
+            }
+        }
+        .frame(minHeight: 32)
+        .padding(.horizontal, 24)
+        .padding(.top, 4)
+    }
+}
+
+// Ollama not installed warning
+struct OllamaNotInstalledView: View {
+    @ObservedObject var ollamaManager: OllamaManager
+    @State private var isRefreshing = false
+    
+    var body: some View {
+        HStack(spacing: 8) {
+            // Expandable warning box
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(.yellow)
+                    .font(.system(size: 13))
+                
+                HStack(spacing: 0) {
+                    Text("Install at ")
+                        .font(.system(size: 12))
+                        .foregroundColor(.primary)
+                    
+                    Link("ollama.com/download", destination: URL(string: "https://ollama.com/download")!)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.blue)
+                        .underline()
+                }
+                .lineLimit(1)
+                
+                Spacer() // This makes the warning box expand
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(warningBackground)
+            
+            // Fixed-width refresh button
+            Button(action: {
+                refreshOllamaStatus()
+            }) {
+                HStack(spacing: 6) {
+                    if isRefreshing {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle())
+                            .colorInvert()
+                            .scaleEffect(0.5)
+                            .frame(width: 12, height: 16)
+                    } else {
+                        Text("Verify")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.white)
+                    }
+                }
+                .frame(minWidth: 60)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color.black)
+                )
+            }
+            .buttonStyle(PlainButtonStyle())
+            .disabled(isRefreshing)
+        }
+    }
+    
+    private func refreshOllamaStatus() {
+        isRefreshing = true
+        let startTime = Date()
+        
+        // Check if Ollama is installed and start server if needed
+        let isInstalled = ollamaManager.checkOllamaInstalled()
+        
+        if isInstalled {
+            // Check server status first
+            ollamaManager.checkServerStatus { isRunning in
+                if !isRunning {
+                    // Server not running, try to start it with retries
+                    self.ollamaManager.ensureServerRunning { success, errorMessage in
+                        DispatchQueue.main.async {
+                            // Ensure minimum 1s spinner duration
+                            let elapsed = Date().timeIntervalSince(startTime)
+                            let remainingTime = max(0, 1.0 - elapsed)
+                            
+                            DispatchQueue.main.asyncAfter(deadline: .now() + remainingTime) {
+                                self.isRefreshing = false
+                            }
+                        }
+                    }
+                } else {
+                    // Server already running
+                    DispatchQueue.main.async {
+                        // Ensure minimum 1s spinner duration
+                        let elapsed = Date().timeIntervalSince(startTime)
+                        let remainingTime = max(0, 1.0 - elapsed)
+                        
+                        DispatchQueue.main.asyncAfter(deadline: .now() + remainingTime) {
+                            self.isRefreshing = false
+                        }
+                    }
+                }
+            }
+        } else {
+            // Not installed, just update the state
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                self.isRefreshing = false
+            }
+        }
+    }
+    
+    private var warningBackground: some View {
+        RoundedRectangle(cornerRadius: 6)
+            .fill(Color.yellow.opacity(0.15))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.yellow.opacity(0.8), lineWidth: 1)
+            )
+    }
+}
+
+// Model installation view with progress
+struct ModelInstallView: View {
+    @ObservedObject var ollamaManager: OllamaManager
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    if !ollamaManager.isPulling {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.yellow)
+                            .font(.system(size: 13))
+                    }
+                    
+                    Text(ollamaManager.isPulling ? ollamaManager.pullProgress : "Recommended model: smollm2")
+                        .font(.system(size: 12))
+                        .foregroundColor(.primary)
+                        .textSelection(.enabled)
+                    
+                    if ollamaManager.isPulling {
+                        ProgressView(value: ollamaManager.pullPercentage, total: 100)
+                            .progressViewStyle(LinearProgressViewStyle(tint: .black))
+                            .background(Color.clear)
+                        
+                        Text(String(format: "%.0f%%", ollamaManager.pullPercentage))
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.primary)
+                            .frame(width: 30, alignment: .trailing)
+                    } else {
+                        Spacer()
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(ollamaManager.isPulling ? Color.gray.opacity(0.1) : Color.yellow.opacity(0.15))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(ollamaManager.isPulling ? Color.black : Color.yellow.opacity(0.8), lineWidth: 1)
+                        )
+                )
+                
+                if !ollamaManager.isPulling {
+                    Text("Install")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color.black)
+                        )
+                        .onTapGesture {
+                            Task {
+                                // Ensure server is running before attempting to pull model
+                                ollamaManager.ensureServerRunning { success, error in
+                                    if success {
+                                        Task {
+                                            await ollamaManager.pullModel("smollm2:latest")
+                                        }
+                                    } else {
+                                        DispatchQueue.main.async {
+                                            ollamaManager.pullProgress = "Error: \(error ?? "Failed to start server")"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .onHover { isHovering in
+                            if isHovering {
+                                NSCursor.pointingHand.push()
+                            } else {
+                                NSCursor.pop()
+                            }
+                        }
+                }
+            }
+            
+            if ollamaManager.isPulling {
+                HStack(spacing: 2) {
+                    Text("You can safely close the modal. Your download will continue.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.top, 2)
+            }
+        }
+        .padding(.top, ollamaManager.isPulling ? -2 : -8)
+    }
+}
+
+// Separate component for Remote configuration UI
+struct RemoteConfigurationView: View {
+    @Environment(\.colorScheme) var colorScheme
+    @Binding var openAIAPIKey: String
+    @Binding var tempOpenAIApiKey: String
+    @Binding var hasUnsavedOpenAI: Bool
+    @Binding var showOpenAISaveConfirmation: Bool
+    @Binding var isEditingMode: Bool
+    @Binding var keychainAccessDenied: Bool
+    
+    var enterEditMode: () -> Void
+    var saveAndExitEditMode: () -> Void
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Powered by OpenAI. Connect to their latest model.")
+                .font(.system(size: 13))
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 24)
+            
+            VStack(alignment: .leading, spacing: 8) {
+                Text("OpenAI API Key")
+                    .font(.system(size: 13))
+                    .foregroundColor(.primary)
+                    .padding(.horizontal, 24)
+                
+                SecureField(isEditingMode ? "Enter your OpenAI API key" : "••••••••••••••••••••", text: $tempOpenAIApiKey)
+                    .textFieldStyle(PlainTextFieldStyle())
+                    .font(.system(size: 13, design: .monospaced))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .stroke(Color.gray.opacity(isEditingMode ? 0.5 : 0.3), lineWidth: 1)
+                            .background(
+                                RoundedRectangle(cornerRadius: 5)
+                                    .fill(isEditingMode ? Color.clear : Color.gray.opacity(0.1))
+                            )
+                    )
+                    .foregroundColor(isEditingMode ? .primary : .secondary)
+                    .disabled(!isEditingMode)
+                    .onChange(of: tempOpenAIApiKey) { newValue in
+                        if isEditingMode {
+                            hasUnsavedOpenAI = (newValue != openAIAPIKey)
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                
+                HStack(spacing: 2) {
+                    Text("Used for reflections. Get your key at")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    Link("platform.openai.com/api-keys", destination: URL(string: "https://platform.openai.com/api-keys")!)
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                }
+                .padding(.horizontal, 24)
+                
+                HStack(spacing: 12) {
+                    Button(action: {
+                        if isEditingMode {
+                            saveAndExitEditMode()
+                        } else {
+                            enterEditMode()
+                        }
+                    }) {
+                        Text(isEditingMode ? "Save" : "Edit")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(colorScheme == .dark ? Color.black : .primary)
+                            )
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    
+                    if showOpenAISaveConfirmation {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                                .font(.system(size: 12))
+                            Text("Saved")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
+                        .transition(.opacity)
+                    }
+                }
+                .animation(.easeInOut(duration: 0.2), value: showOpenAISaveConfirmation)
+                .padding(.horizontal, 24)
+            }
+        }
+        .frame(maxWidth: 400)
+    }
+}
+
 struct APIKeysSettingsView: View {
     @Environment(\.colorScheme) var colorScheme
     @Binding var openAIAPIKey: String
@@ -4685,357 +5507,119 @@ struct APIKeysSettingsView: View {
     }
     
     var body: some View {
-        VStack(spacing: 0) {
-            // Local Configuration - Top Half
-            VStack {
-                Spacer()
-                VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 8) {
-                    Image(systemName: settingsManager.settings.llmMode == "local" ? "checkmark.square.fill" : "square")
-                        .foregroundColor(settingsManager.settings.llmMode == "local" ? .blue : .secondary)
-                        .font(.system(size: 16))
-                        .onTapGesture {
-                            settingsManager.settings.llmMode = "local"
-                            settingsManager.saveSettings()
-                        }
-                        .onHover { isHovering in
-                            if isHovering {
-                                NSCursor.pointingHand.push()
-                            } else {
-                                NSCursor.pop()
-                            }
-                        }
-                    
-                    Text("Local")
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.primary)
-                    
-                    Spacer()
-                }
-                .padding(.leading, 24)
-                
-                Text("Powered by Ollama. 100% private.")
-                    .font(.system(size: 13))
-                    .foregroundColor(.secondary)
-                    .padding(.leading, 24)
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Model")
-                        .font(.system(size: 13))
-                        .foregroundColor(settingsManager.settings.llmMode == "local" ? .primary : .secondary)
-                        .padding(.leading, 24)
-                    
-                    Menu {
-                        ForEach(ollamaManager.availableModels, id: \.self) { model in
-                            Button(action: {
-                                settingsManager.settings.selectedOllamaModel = model
-                                settingsManager.saveSettings()
-                            }) {
-                                Text(model)
-                            }
-                        }
-                    } label: {
-                        HStack {
-                            Text(ollamaManager.availableModels.isEmpty ? "No models detected" : (settingsManager.settings.selectedOllamaModel ?? "Select a model"))
-                                .font(.system(size: 13, design: .monospaced))
-                                .foregroundColor(settingsManager.settings.llmMode == "local" ? .primary : .secondary)
-                            Spacer()
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 12))
-                                .foregroundColor(settingsManager.settings.llmMode == "local" ? .secondary : .secondary.opacity(0.5))
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
-                        .frame(maxWidth: .infinity)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5)
-                                .stroke(Color.gray.opacity(settingsManager.settings.llmMode == "local" ? 0.5 : 0.3), lineWidth: 1)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 5)
-                                        .fill(settingsManager.settings.llmMode == "local" ? Color.clear : Color.gray.opacity(0.1))
-                                )
-                        )
-                    }
-                    .disabled(settingsManager.settings.llmMode != "local")
-                    .padding(.horizontal, 24)
-                    
-                    // Always maintain consistent spacing with a container
-                    HStack {
-                        if settingsManager.settings.llmMode == "local" || ollamaManager.isPulling {
-                            if !ollamaManager.isOllamaInstalled {
-                                // Ollama not installed message
-                                HStack(spacing: 6) {
-                                    Image(systemName: "exclamationmark.triangle.fill")
-                                        .foregroundColor(.yellow)
-                                        .font(.system(size: 13))
-                                    
-                                    Text("Ollama is not installed. Visit ")
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundColor(.primary)
-                                    +
-                                    Text("https://ollama.com/download")
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundColor(.blue)
-                                        .underline()
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .fill(Color.yellow.opacity(0.15))
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 6)
-                                                .stroke(Color.yellow.opacity(0.8), lineWidth: 1)
-                                        )
-                                )
-                                .onTapGesture {
-                                    if let url = URL(string: "https://ollama.com/download") {
-                                        NSWorkspace.shared.open(url)
-                                    }
-                                }
-                            } else if !ollamaManager.availableModels.contains("smollm2:latest") {
-                                // No models message with install button
-                                VStack(alignment: .leading, spacing: 4) {
-                                    HStack(spacing: 8) {
-                                        // Expandable warning box
-                                        HStack(spacing: 6) {
-                                            if !ollamaManager.isPulling {
-                                                Image(systemName: "exclamationmark.triangle.fill")
-                                                    .foregroundColor(.yellow)
-                                                    .font(.system(size: 13))
-                                            }
-                                            
-                                            Text(ollamaManager.isPulling ? ollamaManager.pullProgress : "Recommended model: smollm2")
-                                                .font(.system(size: 12, weight: .medium))
-                                                .foregroundColor(.primary)
-                                            
-                                            // Show progress bar and percentage when pulling
-                                            if ollamaManager.isPulling {
-                                                ProgressView(value: ollamaManager.pullPercentage, total: 100)
-                                                    .progressViewStyle(LinearProgressViewStyle(tint: .black))
-                                                    .background(Color.clear)
-                                                
-                                                Text(String(format: "%.0f%%", ollamaManager.pullPercentage))
-                                                    .font(.system(size: 11, weight: .medium))
-                                                    .foregroundColor(.primary)
-                                                    .frame(width: 30, alignment: .trailing)
-                                            } else {
-                                                Spacer() // This makes the warning box expand
-                                            }
-                                        }
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 6)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 6)
-                                                .fill(ollamaManager.isPulling ? Color.gray.opacity(0.1) : Color.yellow.opacity(0.15))
-                                                .overlay(
-                                                    RoundedRectangle(cornerRadius: 6)
-                                                        .stroke(ollamaManager.isPulling ? Color.black : Color.yellow.opacity(0.8), lineWidth: 1)
-                                                )
-                                        )
-                                        
-                                        // Fixed-width install button (hidden when pulling)
-                                        if !ollamaManager.isPulling {
-                                            Text("Install")
-                                                .font(.system(size: 12, weight: .medium))
-                                                .foregroundColor(.white)
-                                                .padding(.horizontal, 16)
-                                                .padding(.vertical, 6)
-                                                .background(
-                                                    RoundedRectangle(cornerRadius: 6)
-                                                        .fill(Color.black)
-                                                )
-                                                .onTapGesture {
-                                                    Task {
-                                                        await ollamaManager.pullModel("smollm2:latest")
-                                                    }
-                                                }
-                                                .onHover { isHovering in
-                                                    if isHovering {
-                                                        NSCursor.pointingHand.push()
-                                                    } else {
-                                                        NSCursor.pop()
-                                                    }
-                                                }
-                                        }
-                                    }
-                                    
-                                    // Caption text that appears only when pulling - aligned with box edge
-                                    if ollamaManager.isPulling {
-                                        HStack(spacing: 2) {
-                                            Text("You can safely close the modal. Your download will continue.")
-                                                .font(.caption)
-                                                .foregroundColor(.secondary)
-                                        }
-                                        .padding(.top, 2)
-                                    }
-                                }
-                                .padding(.top, ollamaManager.isPulling ? 14 : -8)
-                            } else {
-                                // Empty placeholder to maintain spacing
-                                Color.clear
-                            }
-                        } else {
-                            // Empty placeholder to maintain spacing
-                            Color.clear
-                        }
-                    }
-                    .frame(minHeight: 32) // Minimum height to prevent jumping, but allow expansion
-                    .padding(.leading, 24)
-                    .padding(.top, 4)
-                }
-            }
-                .frame(maxWidth: 400)
-                .onAppear {
-                    // Check Ollama installation status when settings view appears
-                    ollamaManager.checkServerStatus { _ in }
-                    // Set settings manager reference for auto-selection
-                    ollamaManager.settingsManager = settingsManager
-                }
-                Spacer()
-            }
-            .frame(maxHeight: .infinity)
+        VStack(alignment: .leading, spacing: 20) {
+            // Configuration Title and Dropdown
+            ConfigurationHeaderView(settingsManager: settingsManager)
+                .padding(.horizontal, 24)
             
-            // Remote Configuration - Bottom Half
-            VStack {
-                Spacer()
-                VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 8) {
-                    Image(systemName: settingsManager.settings.llmMode == "remote" ? "checkmark.square.fill" : "square")
-                        .foregroundColor(settingsManager.settings.llmMode == "remote" ? .blue : .secondary)
-                        .font(.system(size: 16))
-                        .onTapGesture {
-                            settingsManager.settings.llmMode = "remote"
-                            settingsManager.saveSettings()
-                        }
-                        .onHover { isHovering in
-                            if isHovering {
-                                NSCursor.pointingHand.push()
-                            } else {
-                                NSCursor.pop()
-                            }
-                        }
-                    
-                    Text("Remote")
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.primary)
-                    
-                    Spacer()
-                }
-                .padding(.leading, 24)
-                
-                Text("Powered by OpenAI. Connect to their latest model.")
-                    .font(.system(size: 13))
-                    .foregroundColor(.secondary)
-                    .padding(.leading, 24)
-                
-                // OpenAI API Key Input
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("OpenAI API Key")
-                        .font(.system(size: 13))
-                        .foregroundColor(settingsManager.settings.llmMode == "remote" ? .primary : .secondary)
-                        .padding(.leading, 24)
-                    
-                    SecureField(isEditingMode ? "Enter your OpenAI API key" : "••••••••••••••••••••", text: $tempOpenAIApiKey)
-                        .textFieldStyle(PlainTextFieldStyle())
-                        .font(.system(size: 13, design: .monospaced))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5)
-                                .stroke(Color.gray.opacity(settingsManager.settings.llmMode == "remote" && isEditingMode ? 0.5 : 0.3), lineWidth: 1)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 5)
-                                        .fill(settingsManager.settings.llmMode == "remote" && isEditingMode ? Color.clear : Color.gray.opacity(0.1))
-                                )
-                        )
-                        .foregroundColor(settingsManager.settings.llmMode == "remote" && isEditingMode ? .primary : .secondary)
-                        .disabled(settingsManager.settings.llmMode != "remote" || !isEditingMode)
-                        .onChange(of: tempOpenAIApiKey) { newValue in
-                            if isEditingMode {
-                                hasUnsavedOpenAI = (newValue != openAIAPIKey)
-                            }
-                        }
-                        .padding(.horizontal, 24)
-                    
-                    HStack(spacing: 2) {
-                        Text("Get your key at")
-                            .font(.caption)
-                            .foregroundColor(settingsManager.settings.llmMode == "remote" ? .secondary : .secondary.opacity(0.5))
-                        
-                        Link("platform.openai.com/api-keys", destination: URL(string: "https://platform.openai.com/api-keys")!)
-                            .font(.caption)
-                            .foregroundColor(settingsManager.settings.llmMode == "remote" ? .blue : .blue.opacity(0.5))
-                            .disabled(settingsManager.settings.llmMode != "remote")
-                    }
-                    .padding(.leading, 24)
-                    
-                    HStack(spacing: 12) {
-                        Button(action: {
-                            if isEditingMode {
-                                saveAndExitEditMode()
-                            } else if settingsManager.settings.llmMode == "remote" {
-                                enterEditMode()
-                            }
-                        }) {
-                            Text(isEditingMode ? "Save" : "Edit")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(settingsManager.settings.llmMode == "remote" ? .white : .white.opacity(0.8))
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .fill(settingsManager.settings.llmMode == "remote" ? (colorScheme == .dark ? Color.black : .primary) : Color.gray.opacity(0.5))
-                                )
-                        }
-                        .buttonStyle(PlainButtonStyle())
-                        .disabled(settingsManager.settings.llmMode != "remote")
-                        
-                        if showOpenAISaveConfirmation {
-                            HStack(spacing: 6) {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundColor(.green)
-                                    .font(.system(size: 12))
-                                Text("Saved")
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.secondary)
-                            }
-                            .transition(.opacity)
-                        }
-                    }
-                    .animation(.easeInOut(duration: 0.2), value: showOpenAISaveConfirmation)
-                    .padding(.leading, 24)
-                }
-            }
-                .frame(maxWidth: 400)
-                Spacer()
-            }
-            .frame(maxHeight: .infinity)
-        }
-        .padding(.top, 8)
-        .onAppear {
-            // Don't load from keychain on appear - show empty/greyed out field
-            tempOpenAIApiKey = ""
-            hasUnsavedOpenAI = false
-            isEditingMode = false
-            
-            // If local mode is selected, start Ollama server and fetch models
+            // Show content based on selected configuration
             if settingsManager.settings.llmMode == "local" {
-                ollamaManager.ensureServerRunning { success, error in
-                    if success {
-                        ollamaManager.fetchAvailableModels { _ in }
-                    }
-                }
+                LocalConfigurationView(settingsManager: settingsManager)
+            } else {
+                RemoteConfigurationView(
+                    openAIAPIKey: $openAIAPIKey,
+                    tempOpenAIApiKey: $tempOpenAIApiKey,
+                    hasUnsavedOpenAI: $hasUnsavedOpenAI,
+                    showOpenAISaveConfirmation: $showOpenAISaveConfirmation,
+                    isEditingMode: $isEditingMode,
+                    keychainAccessDenied: $keychainAccessDenied,
+                    enterEditMode: enterEditMode,
+                    saveAndExitEditMode: saveAndExitEditMode
+                )
+            }
+            
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.vertical, 20)
+        .onAppear {
+            // Initialize state based on current mode
+            if settingsManager.settings.llmMode == "local" {
+                print("🔍 Configuration view appeared with Local mode active")
+                ollamaManager.fetchAvailableModels { _ in }
+            } else {
+                print("🔍 Configuration view appeared with Remote mode active")
+                // Ensure clean state when in remote mode
+                ollamaManager.resetState()
             }
         }
         .onChange(of: settingsManager.settings.llmMode) { newMode in
             if newMode == "local" {
-                // Start Ollama server when switching to local mode
+                // Switching TO local mode: reset state, start server, fetch models
+                print("🔄 Switching to Local mode")
+                ollamaManager.resetState()
                 ollamaManager.ensureServerRunning { success, error in
                     if success {
+                        print("✅ Server started, fetching available models")
                         ollamaManager.fetchAvailableModels { _ in }
+                    } else {
+                        print("❌ Failed to start server: \(error ?? "Unknown error")")
+                    }
+                }
+            } else {
+                // Switching FROM local mode (to remote): stop server and reset state
+                print("🔄 Switching to Remote mode")
+                ollamaManager.stopServer()
+                ollamaManager.resetState()
+            }
+        }
+    }
+}
+
+// Configuration header with dropdown menu
+struct ConfigurationHeaderView: View {
+    @ObservedObject var settingsManager: SettingsManager
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Configuration")
+                .font(.title2)
+                .fontWeight(.semibold)
+                .foregroundColor(.primary)
+            
+            Menu {
+                Button(action: {
+                    settingsManager.settings.llmMode = "local"
+                    settingsManager.saveSettings()
+                }) {
+                    Label("Local", systemImage: settingsManager.settings.llmMode == "local" ? "checkmark" : "")
+                }
+                
+                Button(action: {
+                    settingsManager.settings.llmMode = "remote"
+                    settingsManager.saveSettings()
+                }) {
+                    Label("Remote", systemImage: settingsManager.settings.llmMode == "remote" ? "checkmark" : "")
+                }
+            } label: {
+                HStack {
+                    Text(settingsManager.settings.llmMode == "local" ? "Local" : "Remote")
+                        .font(.system(size: 14))
+                        .foregroundColor(.primary)
+                        .allowsHitTesting(false)
+                    Spacer()
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                        .allowsHitTesting(false)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .frame(maxWidth: 200)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.gray.opacity(0.5), lineWidth: 1)
+                )
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PlainButtonStyle())
+            .menuStyle(.button)
+            .onHover { isHovering in
+                DispatchQueue.main.async {
+                    if isHovering {
+                        NSCursor.pointingHand.set()
+                    } else {
+                        NSCursor.arrow.set()
                     }
                 }
             }
