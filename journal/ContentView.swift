@@ -8,6 +8,7 @@
 
 import SwiftUI
 import AppKit
+import Foundation
 import UniformTypeIdentifiers
 import PDFKit
 import AVFoundation
@@ -50,7 +51,7 @@ struct HumanEntry: Identifiable {
 
 enum SettingsTab: String, CaseIterable {
     case reflections = "Reflection"
-    case apiKeys = "API Keys"
+    case apiKeys = "LLM"
     case transcription = "Voice"
 }
 
@@ -61,17 +62,13 @@ enum ReflectionTimeframe {
 
 // Settings data structure for JSON persistence
 struct AppSettings: Codable {
-    var transcription: TranscriptionSettings
+    var llmMode: String // "local" or "remote"
+    var selectedOllamaModel: String?
     
     static let `default` = AppSettings(
-        transcription: TranscriptionSettings.default
+        llmMode: "remote",
+        selectedOllamaModel: nil
     )
-}
-
-
-struct TranscriptionSettings: Codable {
-    // Remove transcription settings
-    static let `default` = TranscriptionSettings()
 }
 
 // Settings manager for JSON persistence
@@ -256,6 +253,388 @@ class KeychainHelper {
             print("🗑️ API key not found in keychain (already deleted)")
         } else {
             print("🗑️ Failed to delete API key from keychain: \(status)")
+        }
+    }
+}
+
+// MARK: - Ollama Manager for local LLM integration
+class OllamaManager: ObservableObject {
+    static let shared = OllamaManager()
+    private init() {}
+    
+    @Published var availableModels: [String] = []
+    @Published var isServerRunning: Bool = false
+    @Published var isPulling: Bool = false
+    @Published var pullProgress: String = ""
+    @Published var pullPercentage: Double = 0.0
+    @Published var isOllamaInstalled: Bool = true  // Assume installed initially
+    
+    private let baseURL = "http://localhost:11434"
+    private var serverProcess: Process?
+    private var pullTask: URLSessionDataTask?
+    var streamBuffer = ""
+    weak var settingsManager: SettingsManager?
+    
+    // Check if Ollama is installed
+    func checkOllamaInstalled() -> Bool {
+        let fileManager = FileManager.default
+        // Check common installation paths
+        let paths = [
+            "/usr/local/bin/ollama",
+            "/opt/homebrew/bin/ollama",
+            "/usr/bin/ollama"
+        ]
+        
+        for path in paths {
+            if fileManager.fileExists(atPath: path) {
+                return true
+            }
+        }
+        
+        // Also check if ollama is in PATH
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+        process.arguments = ["ollama"]
+        
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        
+        do {
+            try process.run()
+            process.waitUntilExit()
+            
+            if process.terminationStatus == 0 {
+                return true
+            }
+        } catch {
+            // Process failed to run
+        }
+        
+        return false
+    }
+    
+    // Check if Ollama server is running
+    func checkServerStatus(completion: @escaping (Bool) -> Void) {
+        // First check if Ollama is installed
+        let installed = checkOllamaInstalled()
+        DispatchQueue.main.async {
+            self.isOllamaInstalled = installed
+        }
+        
+        guard installed else {
+            DispatchQueue.main.async {
+                self.isServerRunning = false
+                completion(false)
+            }
+            return
+        }
+        
+        let url = URL(string: "\(baseURL)/api/tags")!
+        
+        let task = URLSession.shared.dataTask(with: url) { data, response, error in
+            DispatchQueue.main.async {
+                if let httpResponse = response as? HTTPURLResponse,
+                   httpResponse.statusCode == 200 {
+                    self.isServerRunning = true
+                    completion(true)
+                } else {
+                    self.isServerRunning = false
+                    completion(false)
+                }
+            }
+        }
+        task.resume()
+    }
+    
+    // Start Ollama server
+    func startServer(completion: @escaping (Bool, String?) -> Void) {
+        // First check if it's already running
+        checkServerStatus { isRunning in
+            if isRunning {
+                completion(true, nil)
+                return
+            }
+            
+            // Try to start the server
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/local/bin/ollama")
+            process.arguments = ["serve"]
+            
+            do {
+                try process.run()
+                self.serverProcess = process
+                
+                // Wait a bit for server to start
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    self.checkServerStatus { isRunning in
+                        if isRunning {
+                            completion(true, nil)
+                        } else {
+                            completion(false, "Ollama server failed to start")
+                        }
+                    }
+                }
+            } catch {
+                completion(false, "Failed to launch Ollama: \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    // Fetch available models
+    func fetchAvailableModels(completion: @escaping ([String]) -> Void) {
+        checkServerStatus { isRunning in
+            guard isRunning else {
+                completion([])
+                return
+            }
+            
+            let url = URL(string: "\(self.baseURL)/api/tags")!
+            
+            let task = URLSession.shared.dataTask(with: url) { data, response, error in
+                DispatchQueue.main.async {
+                    guard let data = data,
+                          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let models = json["models"] as? [[String: Any]] else {
+                        completion([])
+                        return
+                    }
+                    
+                    let modelNames = models.compactMap { $0["name"] as? String }
+                    self.availableModels = modelNames
+                    completion(modelNames)
+                }
+            }
+            task.resume()
+        }
+    }
+    
+    // Ensure server is running with retries
+    func ensureServerRunning(retries: Int = 3, completion: @escaping (Bool, String?) -> Void) {
+        checkServerStatus { isRunning in
+            if isRunning {
+                completion(true, nil)
+                return
+            }
+            
+            if retries > 0 {
+                self.startServer { success, error in
+                    if success {
+                        completion(true, nil)
+                    } else {
+                        // Retry with exponential backoff
+                        let delay = Double(4 - retries) * 2.0
+                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                            self.ensureServerRunning(retries: retries - 1, completion: completion)
+                        }
+                    }
+                }
+            } else {
+                completion(false, "Ollama server is not starting. Please start it manually.")
+            }
+        }
+    }
+    
+    // Pull a model from Ollama
+    func pullModel(_ modelName: String) async {
+        guard !isPulling else { 
+            print("🔴 Already pulling a model, ignoring request")
+            return 
+        }
+        
+        print("🟢 Starting pull for model: \(modelName)")
+        
+        await MainActor.run {
+            self.isPulling = true
+            self.pullProgress = "Starting download..."
+            self.pullPercentage = 0.0
+        }
+        
+        guard let url = URL(string: "\(baseURL)/api/pull") else { 
+            print("🔴 Failed to create URL for: \(baseURL)/api/pull")
+            return 
+        }
+        
+        print("🟢 Created URL: \(url)")
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let body: [String: Any] = [
+            "model": modelName,
+            "stream": true  // Enable streaming for progress updates
+        ]
+        
+        print("🟢 Request body: \(body)")
+        
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            print("🟢 Request body serialized successfully")
+        } catch {
+            print("🔴 Failed to serialize request body: \(error)")
+            await MainActor.run {
+                self.isPulling = false
+                self.pullProgress = "Error: Failed to create request"
+            }
+            return
+        }
+        
+        // Create a delegate to handle streaming
+        print("🟢 Creating URLSession with delegate")
+        let session = URLSession(configuration: .default, delegate: OllamaStreamDelegate(manager: self), delegateQueue: nil)
+        pullTask = session.dataTask(with: request)
+        print("🟢 Starting data task")
+        pullTask?.resume()
+    }
+}
+
+// Delegate to handle streaming responses from Ollama
+class OllamaStreamDelegate: NSObject, URLSessionDataDelegate {
+    private weak var manager: OllamaManager?
+    private var totalBytes: Int = 0
+    private var completedBytes: Int = 0
+    
+    init(manager: OllamaManager) {
+        self.manager = manager
+        super.init()
+    }
+    
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        guard let manager = manager else { 
+            print("🔴 URLSession delegate: manager is nil")
+            return 
+        }
+        
+        // Append data to buffer
+        if let string = String(data: data, encoding: .utf8) {
+            manager.streamBuffer += string
+            
+            // Process complete lines
+            let lines = manager.streamBuffer.components(separatedBy: "\n")
+            
+            for i in 0..<lines.count - 1 {
+                let line = lines[i].trimmingCharacters(in: .whitespacesAndNewlines)
+                if !line.isEmpty {
+                    processJSONLine(line)
+                } else {
+                }
+            }
+            
+            // Keep the incomplete line in buffer
+            manager.streamBuffer = lines.last ?? ""
+        } else {
+            print("🔴 Failed to convert data to UTF-8 string")
+        }
+    }
+    
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard let manager = manager else { 
+            return 
+        }
+        
+        DispatchQueue.main.async {
+            if let error = error {
+                manager.pullProgress = "Error: \(error.localizedDescription)"
+                manager.isPulling = false
+            } else {
+                // Process any remaining data in buffer
+                if !manager.streamBuffer.isEmpty {
+                    self.processJSONLine(manager.streamBuffer)
+                }
+                manager.streamBuffer = ""
+            }
+        }
+    }
+    
+    private func capitalizeFirstWord(_ text: String) -> String {
+        let words = text.split(separator: " ")
+        if words.isEmpty { return text }
+        
+        var result = words[0].prefix(1).uppercased() + words[0].dropFirst()
+        for i in 1..<words.count {
+            result += " " + words[i]
+        }
+        return result
+    }
+    
+    private func processJSONLine(_ line: String) {
+        guard let manager = manager,
+              let data = line.data(using: .utf8) else { 
+            return 
+        }
+        
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { 
+            return 
+        }
+        
+        DispatchQueue.main.async {
+            if let status = json["status"] as? String {
+                
+                // Handle different status types
+                switch status {
+                case "success":
+                    manager.isPulling = false
+                    manager.pullProgress = ""
+                    manager.pullPercentage = 0.0
+                    // Refresh available models and auto-select smollm2:latest
+                    manager.fetchAvailableModels { _ in
+                        // Auto-select smollm2:latest if it was just downloaded
+                        if let settingsManager = manager.settingsManager {
+                            DispatchQueue.main.async {
+                                if manager.availableModels.contains("smollm2:latest") {
+                                    settingsManager.settings.selectedOllamaModel = "smollm2:latest"
+                                    settingsManager.saveSettings()
+                                }
+                            }
+                        }
+                    }
+                    
+                case "pulling manifest":
+                    manager.pullProgress = "Pulling manifest"
+                    manager.pullPercentage = 0.0
+                    
+                case "verifying sha256 digest":
+                    manager.pullProgress = "Verifying download"
+                    manager.pullPercentage = 95.0
+                    
+                case "writing manifest":
+                    manager.pullProgress = "Writing manifest"
+                    manager.pullPercentage = 98.0
+                    
+                case "removing any unused layers":
+                    manager.pullProgress = "Cleaning up"
+                    manager.pullPercentage = 99.0
+                    
+                case let status where status.starts(with: "downloading") || status.starts(with: "pulling"):
+                    // Extract progress from downloading/pulling status
+                    if let total = json["total"] as? Int,
+                       let completed = json["completed"] as? Int {
+                        self.totalBytes = total
+                        self.completedBytes = completed
+                        let percentage = total > 0 ? (Double(completed) / Double(total)) * 100 : 0
+                        manager.pullPercentage = min(percentage, 90.0) // Cap at 90% for download phase
+                        
+                        // Extract digest for better progress message
+                        if let digest = json["digest"] as? String {
+                            let shortDigest = String(digest.prefix(12))
+                            manager.pullProgress = "Pulling \(shortDigest)"
+                        } else {
+                            manager.pullProgress = "Downloading model"
+                        }
+                    } else {
+                        // Fallback for downloading/pulling status without progress data
+                        manager.pullProgress = "Downloading model"
+                    }
+                    
+                default:
+                    // For other statuses, just show the capitalized status
+                    let capitalizedStatus = self.capitalizeFirstWord(status)
+                    manager.pullProgress = capitalizedStatus
+                }
+            } else {
+                print("⚠️ No status field in JSON response")
+            }
         }
     }
 }
@@ -562,7 +941,7 @@ struct ContentView: View {
         isStreamingReflection = true
         
         // Start reflection with the gathered content
-        reflectionViewModel.start(apiKey: apiKey, entryText: rangeContent) {
+        reflectionViewModel.start(apiKey: apiKey, entryText: rangeContent, llmMode: settingsManager.settings.llmMode, selectedOllamaModel: settingsManager.settings.selectedOllamaModel) {
             // On complete: add new empty USER section, unfreeze editor, and save
             self.sections.append(EntrySection(type: .user, text: "\n\n"))
             self.editingText = "\n\n"
@@ -668,7 +1047,7 @@ struct ContentView: View {
         isStreamingReflection = true
         
         // Start question response with the gathered content
-        reflectionViewModel.startQuestionResponse(apiKey: apiKey, allEntries: allContent, question: question) {
+        reflectionViewModel.startQuestionResponse(apiKey: apiKey, allEntries: allContent, question: question, llmMode: settingsManager.settings.llmMode, selectedOllamaModel: settingsManager.settings.selectedOllamaModel) {
             // On complete: add new empty USER section, unfreeze editor, and save
             self.sections.append(EntrySection(type: .user, text: "\n\n"))
             self.editingText = "\n\n"
@@ -1065,7 +1444,7 @@ struct ContentView: View {
                         let components = matchString.components(separatedBy: "]-[")
                         
                         if components.count >= 5 {
-                            let timeframeType = components[1]
+                            _ = components[1]  // timeframeType (unused in this context)
                             let reflectionStartDateString = components[2]
                             let reflectionEndDateString = components[3]
                             
@@ -1793,6 +2172,8 @@ struct ContentView: View {
                                         apiKey: apiKey,
                                         originalEntries: originalEntries,
                                         reflectionContent: currentReflectionContent,
+                                        llmMode: settingsManager.settings.llmMode,
+                                        selectedOllamaModel: settingsManager.settings.selectedOllamaModel,
                                         onComplete: {
                                             // On complete: add new empty USER section, unfreeze editor, and save
                                             sections.append(EntrySection(type: .user, text: "\n\n"))
@@ -1827,7 +2208,7 @@ struct ContentView: View {
                                     let fullContext = buildFullConversationContext()
                                     
                                     // Start reflection with streaming to file
-                                    reflectionViewModel.start(apiKey: apiKey, entryText: fullContext) {
+                                    reflectionViewModel.start(apiKey: apiKey, entryText: fullContext, llmMode: settingsManager.settings.llmMode, selectedOllamaModel: settingsManager.settings.selectedOllamaModel) {
                                         // On complete: add new empty USER section, unfreeze editor, and save
                                         sections.append(EntrySection(type: .user, text: "\n\n"))
                                         editingText = "\n\n"
@@ -2454,6 +2835,16 @@ struct ContentView: View {
                             window.toggleFullScreen(nil)
                         }
                     }
+                }
+            }
+            
+            NotificationCenter.default.addObserver(
+                forName: NSNotification.Name("ToggleSettings"),
+                object: nil,
+                queue: .main
+            ) { _ in
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showingSettings.toggle()
                 }
             }
         }
@@ -3129,7 +3520,7 @@ struct ContentView: View {
                 // Parse new section-based format
                 if fullContent.contains("--- USER ---") || fullContent.contains("--- REFLECTION ---") {
                     // Split content by section markers
-                    let sectionPattern = "(--- USER ---|--- REFLECTION ---)"
+                    _ = "(--- USER ---|--- REFLECTION ---)"  // sectionPattern (unused)
                     let parts = fullContent.components(separatedBy: .newlines)
                     
                     var currentSectionType: EntrySectionType? = nil
@@ -3493,11 +3884,24 @@ struct ContentView: View {
         private var streamingTask: URLSessionDataTask?
         private var onComplete: (() -> Void)?
         private var onStream: ((String) -> Void)?
+        
+        // Thinking tag state for Ollama responses
+        private var isInThinkingBlock: Bool = false
+        private var currentThinkingTag: String? = nil
+        private var bufferedContent: String = ""
+        private var waitingForFirstContent: Bool = false
 
-        func start(apiKey: String, entryText: String, onComplete: @escaping () -> Void, onStream: ((String) -> Void)? = nil) {
-            guard !apiKey.isEmpty else {
-                self.error = "Please enter your OpenAI API key in Settings"
-                return
+        func start(apiKey: String, entryText: String, llmMode: String, selectedOllamaModel: String?, onComplete: @escaping () -> Void, onStream: ((String) -> Void)? = nil) {
+            if llmMode == "remote" {
+                guard !apiKey.isEmpty else {
+                    self.error = "Please enter your OpenAI API key in Settings"
+                    return
+                }
+            } else {
+                guard let model = selectedOllamaModel, !model.isEmpty else {
+                    self.error = "Please select an Ollama model in Settings"
+                    return
+                }
             }
             
             guard !entryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -3511,14 +3915,31 @@ struct ContentView: View {
             self.hasBeenRun = true
             self.onComplete = onComplete
             self.onStream = onStream
+            
+            // Reset thinking tag state
+            self.isInThinkingBlock = false
+            self.currentThinkingTag = nil
+            self.bufferedContent = ""
+            self.waitingForFirstContent = false
 
-            streamOpenAIResponse(apiKey: apiKey, entryText: entryText)
+            if llmMode == "remote" {
+                streamOpenAIResponse(apiKey: apiKey, entryText: entryText)
+            } else {
+                streamOllamaResponse(model: selectedOllamaModel!, entryText: entryText)
+            }
         }
         
-        func startReflectionFollowup(apiKey: String, originalEntries: String, reflectionContent: String, onComplete: @escaping () -> Void, onStream: ((String) -> Void)? = nil) {
-            guard !apiKey.isEmpty else {
-                self.error = "Please enter your OpenAI API key in Settings"
-                return
+        func startReflectionFollowup(apiKey: String, originalEntries: String, reflectionContent: String, llmMode: String, selectedOllamaModel: String?, onComplete: @escaping () -> Void, onStream: ((String) -> Void)? = nil) {
+            if llmMode == "remote" {
+                guard !apiKey.isEmpty else {
+                    self.error = "Please enter your OpenAI API key in Settings"
+                    return
+                }
+            } else {
+                guard let model = selectedOllamaModel, !model.isEmpty else {
+                    self.error = "Please select an Ollama model in Settings"
+                    return
+                }
             }
             
             guard !originalEntries.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -3533,16 +3954,33 @@ struct ContentView: View {
             self.onComplete = onComplete
             self.onStream = onStream
             
+            // Reset thinking tag state
+            self.isInThinkingBlock = false
+            self.currentThinkingTag = nil
+            self.bufferedContent = ""
+            self.waitingForFirstContent = false
+            
             // Combine original entries with current reflection content
             let combinedContent = originalEntries + "\n\n=== PREVIOUS REFLECTION AND NEW THOUGHTS ===\n\n" + reflectionContent
             
-            streamOpenAIResponse(apiKey: apiKey, entryText: combinedContent)
+            if llmMode == "remote" {
+                streamOpenAIResponse(apiKey: apiKey, entryText: combinedContent)
+            } else {
+                streamOllamaResponse(model: selectedOllamaModel!, entryText: combinedContent)
+            }
         }
         
-        func startQuestionResponse(apiKey: String, allEntries: String, question: String, onComplete: @escaping () -> Void, onStream: ((String) -> Void)? = nil) {
-            guard !apiKey.isEmpty else {
-                self.error = "Please enter your OpenAI API key in Settings"
-                return
+        func startQuestionResponse(apiKey: String, allEntries: String, question: String, llmMode: String, selectedOllamaModel: String?, onComplete: @escaping () -> Void, onStream: ((String) -> Void)? = nil) {
+            if llmMode == "remote" {
+                guard !apiKey.isEmpty else {
+                    self.error = "Please enter your OpenAI API key in Settings"
+                    return
+                }
+            } else {
+                guard let model = selectedOllamaModel, !model.isEmpty else {
+                    self.error = "Please select an Ollama model in Settings"
+                    return
+                }
             }
             
             guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -3557,7 +3995,17 @@ struct ContentView: View {
             self.onComplete = onComplete
             self.onStream = onStream
             
-            streamQuestionResponse(apiKey: apiKey, allEntries: allEntries, question: question)
+            // Reset thinking tag state
+            self.isInThinkingBlock = false
+            self.currentThinkingTag = nil
+            self.bufferedContent = ""
+            self.waitingForFirstContent = false
+            
+            if llmMode == "remote" {
+                streamQuestionResponse(apiKey: apiKey, allEntries: allEntries, question: question)
+            } else {
+                streamOllamaQuestionResponse(model: selectedOllamaModel!, allEntries: allEntries, question: question)
+            }
         }
 
         private func streamOpenAIResponse(apiKey: String, entryText: String) {
@@ -3571,13 +4019,15 @@ struct ContentView: View {
             let systemPrompt = """
             below are my journal entries as well as my reflections on them. wyt? talk through it with me like a friend. don't therapize me and give me a whole breakdown, don't repeat my thoughts with headings. really take all of this, and tell me back stuff truly as if you're an old homie.
 
-            Keep it casual, dont say yo, help me make new connections i don't see, comfort, validate, challenge, all of it. dont be afraid to say a lot. format with headings if needed. use new paragrahs to make what you say more readable. don't use markdown or any other formatting. just use text.
+            Keep it casual, dont say yo, help me make new connections i don't see, comfort, validate, challenge, all of it. dont be afraid to say a lot. format with headings if needed. use new paragrahs to make what you say more readable.
 
             do not just go through every single thing i say, and say it back to me. you need to process everything i say, make connections i don't see it, and deliver it all back to me as a story that makes me feel what you think i wanna feel. thats what the best therapists do.
 
             the length should match the intensity of thought. if it's a light entry, be more concise. if it's a heavy entry, really dive in.
             
             ideally, you're style/tone should sound like the user themselves. it's as if the user is hearing their own tone but it should still feel different, because you have different things to say and don't just repeat back what i say.
+
+            don't use markdown or any other formatting. just use text.
 
             else, start by saying, "hey, thanks for showing me this :) my thoughts:" or "more thoughts:"
             """
@@ -3606,11 +4056,168 @@ struct ContentView: View {
             streamingTask?.resume()
         }
         
+        private func streamOllamaResponse(model: String, entryText: String) {
+            let endpoint = URL(string: "http://localhost:11434/api/chat")!
+            
+            var request = URLRequest(url: endpoint)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            
+            let systemPrompt = """
+            below are my journal entries as well as my reflections on them. wyt? talk through it with me like a friend. don't therapize me and give me a whole breakdown, don't repeat my thoughts with headings. really take all of this, and tell me back stuff truly as if you're an old homie.
+
+            Keep it casual, dont say yo, help me make new connections i don't see, comfort, validate, challenge, all of it. dont be afraid to say a lot. format with headings if needed. use new paragrahs to make what you say more readable.
+
+            do not just go through every single thing i say, and say it back to me. you need to process everything i say, make connections i don't see it, and deliver it all back to me as a story that makes me feel what you think i wanna feel. thats what the best therapists do.
+
+            the length should match the intensity of thought. if it's a light entry, be more concise. if it's a heavy entry, really dive in.
+            
+            ideally, you're style/tone should sound like the user themselves. it's as if the user is hearing their own tone but it should still feel different, because you have different things to say and don't just repeat back what i say.
+
+            don't use markdown or any other formatting. just use text.
+            
+            else, start by saying, "hey, thanks for showing me this :) my thoughts:" or "more thoughts:"
+            """
+
+            let messages: [[String: String]] = [
+                ["role": "system", "content": systemPrompt],
+                ["role": "user", "content": entryText]
+            ]
+            
+            let payload: [String: Any] = [
+                "model": model,
+                "messages": messages,
+                "stream": true
+            ]
+            
+            do {
+                request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+            } catch {
+                DispatchQueue.main.async {
+                    self.isLoading = false
+                    self.error = "Failed to prepare request."
+                }
+                return
+            }
+            
+            let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+            streamingTask = session.dataTask(with: request)
+            streamingTask?.resume()
+        }
+        
+        private func processOllamaContent(_ content: String) {
+            print("🔍 processOllamaContent called with: '\(content.replacingOccurrences(of: "\n", with: "\\n"))'")
+            print("📊 Current state - isInThinkingBlock: \(isInThinkingBlock), waitingForFirstContent: \(waitingForFirstContent), currentTag: \(currentThinkingTag ?? "nil")")
+            print("📝 Current bufferedContent length: \(bufferedContent.count)")
+            
+            // If we're waiting for first content after closing tag, continue buffering
+            if waitingForFirstContent {
+                print("⏳ In waitingForFirstContent mode, adding to buffer")
+                bufferedContent += content
+                
+                // Look for first non-whitespace character
+                let trimmed = bufferedContent.trimmingCharacters(in: .whitespacesAndNewlines)
+                print("✂️ Trimmed content: '\(trimmed)'")
+                if !trimmed.isEmpty {
+                    // Found first actual content, start streaming from here
+                    print("✅ Found first real content, starting to stream: '\(trimmed)'")
+                    waitingForFirstContent = false
+                    let contentToStream = trimmed
+                    bufferedContent = ""
+                    
+                    DispatchQueue.main.async {
+                        self.reflectionResponse += contentToStream
+                        self.onStream?(self.reflectionResponse)
+                    }
+                } else {
+                    print("⏸️ Still only whitespace, continuing to wait")
+                }
+                return
+            }
+            
+            // Add content to buffer
+            bufferedContent += content
+            print("📝 Updated bufferedContent: '\(bufferedContent.replacingOccurrences(of: "\n", with: "\\n"))'")
+            
+            // If we're not in a thinking block yet, check if we're starting one
+            if !isInThinkingBlock {
+                print("🔄 Not in thinking block, checking for opening tags")
+                // Check if content starts with '<' and we might be entering a thinking block
+                if bufferedContent.hasPrefix("<") {
+                    print("🏷️ Buffer starts with '<', looking for opening tag")
+                    // Look for complete opening tags like <think>, <reasoning>, etc.
+                    let openTagPattern = #"<([a-zA-Z][a-zA-Z0-9_\-]*)>"#
+                    if let regex = try? NSRegularExpression(pattern: openTagPattern),
+                       let match = regex.firstMatch(in: bufferedContent, range: NSRange(bufferedContent.startIndex..., in: bufferedContent)) {
+                        if let tagRange = Range(match.range(at: 1), in: bufferedContent) {
+                            currentThinkingTag = String(bufferedContent[tagRange])
+                            isInThinkingBlock = true
+                            print("🎯 Found opening tag: '\(currentThinkingTag!)', entering thinking block")
+                            return // Don't stream content yet
+                        }
+                    }
+                    // If we start with '<' but haven't found a complete tag yet, don't stream
+                    print("⏸️ Starts with '<' but no complete tag found yet, not streaming")
+                    return
+                }
+                
+                print("📤 No thinking tag detected, streaming normally: '\(content)'")
+                // No thinking tag detected, stream normally
+                DispatchQueue.main.async {
+                    self.reflectionResponse += content
+                    self.onStream?(self.reflectionResponse)
+                }
+            } else {
+                print("🧠 In thinking block, looking for closing tag")
+                // We're in a thinking block, look for the closing tag
+                if let tag = currentThinkingTag {
+                    let closeTag = "</\(tag)>"
+                    print("🔍 Looking for closing tag: '\(closeTag)'")
+                    if let closeRange = bufferedContent.range(of: closeTag) {
+                        print("🎉 Found closing tag!")
+                        // Found closing tag, extract content after it
+                        let afterThinkingContent = String(bufferedContent[closeRange.upperBound...])
+                        print("📄 Content after thinking tag: '\(afterThinkingContent.replacingOccurrences(of: "\n", with: "\\n"))'")
+                        
+                        // Reset thinking block state
+                        isInThinkingBlock = false
+                        currentThinkingTag = nil
+                        
+                        // Check if there's actual content after the tag
+                        let trimmedContent = afterThinkingContent.trimmingCharacters(in: .whitespacesAndNewlines)
+                        print("✂️ Trimmed after-tag content: '\(trimmedContent)'")
+                        
+                        if !trimmedContent.isEmpty {
+                            print("✅ Found actual content after tag, streaming immediately: '\(trimmedContent)'")
+                            // There's actual content, stream it immediately
+                            bufferedContent = ""
+                            DispatchQueue.main.async {
+                                self.reflectionResponse += trimmedContent
+                                self.onStream?(self.reflectionResponse)
+                            }
+                        } else {
+                            print("⏳ Only whitespace after tag, entering waitingForFirstContent mode")
+                            // Only whitespace after tag, wait for first real content
+                            waitingForFirstContent = true
+                            bufferedContent = afterThinkingContent
+                        }
+                    } else {
+                        print("🔄 Closing tag not found yet, continuing to buffer")
+                    }
+                    // If we haven't found the closing tag yet, keep buffering
+                }
+            }
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        }
+        
         func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
             let stringData = String(data: data, encoding: .utf8) ?? ""
+            print("🔗 URL Session received data: '\(stringData.replacingOccurrences(of: "\n", with: "\\n"))'")
             let lines = stringData.split(separator: "\n")
+            print("📝 Split into \(lines.count) lines")
             
             for line in lines {
+                // Handle OpenAI format (SSE with "data: " prefix)
                 if line.hasPrefix("data: ") {
                     let jsonString = String(line.dropFirst(6))
                     
@@ -3638,6 +4245,53 @@ struct ContentView: View {
                             // JSON parsing error
                         }
                     }
+                } else {
+                    // Handle Ollama format (JSON lines)
+                    let trimmedLine = String(line).trimmingCharacters(in: .whitespacesAndNewlines)
+                    print("🌐 Ollama line received: '\(trimmedLine)'")
+                    if !trimmedLine.isEmpty,
+                       let jsonData = trimmedLine.data(using: .utf8) {
+                        do {
+                            if let json = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
+                                print("📦 Parsed Ollama JSON: \(json)")
+                                // Updated for /api/chat endpoint: extract message.content
+                                if let message = json["message"] as? [String: Any],
+                                   let content = message["content"] as? String {
+                                    print("📨 Ollama response chunk: '\(content.replacingOccurrences(of: "\n", with: "\\n"))'")
+                                    self.processOllamaContent(content)
+                                }
+                                // Remove old /api/generate 'response' field handling
+                                // if let response = json["response"] as? String {
+                                //     print("📨 Ollama response chunk: '\(response.replacingOccurrences(of: "\n", with: "\\n"))'")
+                                //     self.processOllamaContent(response)
+                                // }
+                                if let done = json["done"] as? Bool, done {
+                                    print("🏁 Ollama stream completed, processing remaining buffer")
+                                    // Handle any remaining buffered content when stream completes
+                                    print("🧹 Checking for remaining buffer content. Buffer empty: \(self.bufferedContent.isEmpty), inThinking: \(self.isInThinkingBlock), waitingForContent: \(self.waitingForFirstContent)")
+                                    if !self.bufferedContent.isEmpty && (self.isInThinkingBlock || self.waitingForFirstContent) {
+                                        // If we're still in a thinking block or waiting for content, stream the remaining content anyway
+                                        let contentToStream = self.bufferedContent.trimmingCharacters(in: .whitespacesAndNewlines)
+                                        print("🔚 Streaming remaining buffer content: '\(contentToStream)'")
+                                        if !contentToStream.isEmpty {
+                                            DispatchQueue.main.async {
+                                                self.reflectionResponse += contentToStream
+                                                self.onStream?(self.reflectionResponse)
+                                            }
+                                        }
+                                    }
+                                    
+                                    DispatchQueue.main.async {
+                                        self.isLoading = false
+                                        self.onComplete?()
+                                    }
+                                    return
+                                }
+                            }
+                        } catch {
+                            // JSON parsing error
+                        }
+                    }
                 }
             }
         }
@@ -3653,9 +4307,11 @@ struct ContentView: View {
             let systemPrompt = """
             below are my journal entries as well as my reflections on them. i will be asking a question and below is all the information you know about me. use this to answer the question.in your answer talk through it with me like a friend. don't therapize me and give me a whole breakdown, don't repeat my thoughts with headings. really take all of this, and answer the question as if you're an old homie.
 
-            keep it casual, dont say yo, help me make new connections i don't see, comfort, validate, challenge, all of it. dont be afraid to say a lot. format with headings if needed. use new paragrahs to make what you say more readable. don't use markdown or any other formatting. just use text.
+            keep it casual, dont say yo, help me make new connections i don't see, comfort, validate, challenge, all of it. dont be afraid to say a lot. format with headings if needed. use new paragrahs to make what you say more readable.
 
             do not just go through every single thing i say, and say it back to me. you need to process everything said, making connections i don't see it, and then use the relevant bits to answer the question
+
+            don't use markdown or any other formatting. just use text.
 
             my entries: 
             """
@@ -3667,6 +4323,52 @@ struct ContentView: View {
                     ["role": "system", "content": allEntries],
                     ["role": "user", "content": question]
                 ],
+                "stream": true
+            ]
+            
+            do {
+                request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+            } catch {
+                DispatchQueue.main.async {
+                    self.isLoading = false
+                    self.error = "Failed to prepare request."
+                }
+                return
+            }
+            
+            let session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+            streamingTask = session.dataTask(with: request)
+            streamingTask?.resume()
+        }
+        
+        private func streamOllamaQuestionResponse(model: String, allEntries: String, question: String) {
+            let endpoint = URL(string: "http://localhost:11434/api/chat")!
+            
+            var request = URLRequest(url: endpoint)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            
+            let systemPrompt = """
+            below are my journal entries as well as my reflections on them. i will be asking a question and below is all the information you know about me. use this to answer the question.in your answer talk through it with me like a friend. don't therapize me and give me a whole breakdown, don't repeat my thoughts with headings. really take all of this, and answer the question as if you're an old homie.
+
+            keep it casual, dont say yo, help me make new connections i don't see, comfort, validate, challenge, all of it. dont be afraid to say a lot. format with headings if needed. use new paragrahs to make what you say more readable.
+
+            do not just go through every single thing i say, and say it back to me. you need to process everything said, making connections i don't see it, and then use the relevant bits to answer the question
+
+            don't use markdown or any other formatting. just use text.
+            
+            my entries: 
+            """
+
+            let messages: [[String: String]] = [
+                ["role": "system", "content": systemPrompt],
+                ["role": "system", "content": allEntries],
+                ["role": "user", "content": question]
+            ]
+            
+            let payload: [String: Any] = [
+                "model": model,
+                "messages": messages,
                 "stream": true
             ]
             
@@ -3826,8 +4528,8 @@ struct SettingsSidebar: View {
                 )
                 
                 SettingsSidebarItem(
-                    title: "API Keys",
-                    icon: "key.fill",
+                    title: "LLM",
+                    icon: "bolt.circle",
                     isSelected: selectedTab == .apiKeys,
                     action: { selectedTab = .apiKeys }
                 )
@@ -3898,25 +4600,44 @@ struct SettingsContent: View {
                     onRunCustom: { fromDate, toDate in runDateRangeReflection(fromDate, toDate, "Custom") }
                 )
             case .apiKeys:
-                APIKeysSettingsView(openAIAPIKey: $openAIAPIKey)
+                APIKeysSettingsView(openAIAPIKey: $openAIAPIKey, settingsManager: settingsManager)
             case .transcription:
                 TranscriptionSettingsView(settingsManager: settingsManager)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(20)
+        .onChange(of: selectedTab) { newTab in
+            if newTab == .apiKeys {
+                // Refresh available models when switching to LLM tab
+                OllamaManager.shared.fetchAvailableModels { models in
+                    DispatchQueue.main.async {
+                        // Check if the currently selected model is still available
+                        if let selectedModel = settingsManager.settings.selectedOllamaModel,
+                           !models.contains(selectedModel),
+                           !models.isEmpty {
+                            // Select the first available model if current selection is not available
+                            settingsManager.settings.selectedOllamaModel = models.first
+                            settingsManager.saveSettings()
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
 struct APIKeysSettingsView: View {
     @Environment(\.colorScheme) var colorScheme
     @Binding var openAIAPIKey: String
+    @ObservedObject var settingsManager: SettingsManager
     
     @State private var tempOpenAIApiKey: String = ""
     @State private var hasUnsavedOpenAI: Bool = false
     @State private var showOpenAISaveConfirmation: Bool = false
     @State private var isEditingMode: Bool = false
     @State private var keychainAccessDenied: Bool = false
+    @StateObject private var ollamaManager = OllamaManager.shared
     
     private func enterEditMode() {
         // Check if keychain access is denied first
@@ -3964,80 +4685,334 @@ struct APIKeysSettingsView: View {
     }
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            // OpenAI API Key Input
-            VStack(alignment: .leading, spacing: 8) {
-                Text("OpenAI API Key")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(.primary)
-                
-                SecureField(isEditingMode ? "Enter your OpenAI API key" : "••••••••••••••••••••", text: $tempOpenAIApiKey)
-                    .textFieldStyle(PlainTextFieldStyle())
-                    .font(.system(size: 13, design: .monospaced))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .background(
-                        RoundedRectangle(cornerRadius: 5)
-                            .stroke(Color.gray.opacity(isEditingMode ? 0.5 : 0.3), lineWidth: 1)
-                            .background(
-                                RoundedRectangle(cornerRadius: 5)
-                                    .fill(isEditingMode ? Color.clear : Color.gray.opacity(0.1))
-                            )
-                    )
-                    .foregroundColor(isEditingMode ? .primary : .secondary)
-                    .disabled(!isEditingMode)
-                    .onChange(of: tempOpenAIApiKey) { newValue in
-                        if isEditingMode {
-                            hasUnsavedOpenAI = (newValue != openAIAPIKey)
+        VStack(spacing: 0) {
+            // Local Configuration - Top Half
+            VStack {
+                Spacer()
+                VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    Image(systemName: settingsManager.settings.llmMode == "local" ? "checkmark.square.fill" : "square")
+                        .foregroundColor(settingsManager.settings.llmMode == "local" ? .blue : .secondary)
+                        .font(.system(size: 16))
+                        .onTapGesture {
+                            settingsManager.settings.llmMode = "local"
+                            settingsManager.saveSettings()
                         }
-                    }
-                
-                HStack(spacing: 2) {
-                    Text("Used for reflections. Get your key at")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .onHover { isHovering in
+                            if isHovering {
+                                NSCursor.pointingHand.push()
+                            } else {
+                                NSCursor.pop()
+                            }
+                        }
                     
-                    Link("platform.openai.com/api-keys", destination: URL(string: "https://platform.openai.com/api-keys")!)
-                        .font(.caption)
-                        .foregroundColor(.blue)
+                    Text("Local")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.primary)
+                    
+                    Spacer()
                 }
+                .padding(.leading, 24)
                 
-                HStack(spacing: 12) {
-                    Button(action: {
-                        if isEditingMode {
-                            saveAndExitEditMode()
+                Text("Powered by Ollama. 100% private.")
+                    .font(.system(size: 13))
+                    .foregroundColor(.secondary)
+                    .padding(.leading, 24)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Model")
+                        .font(.system(size: 13))
+                        .foregroundColor(settingsManager.settings.llmMode == "local" ? .primary : .secondary)
+                        .padding(.leading, 24)
+                    
+                    Menu {
+                        ForEach(ollamaManager.availableModels, id: \.self) { model in
+                            Button(action: {
+                                settingsManager.settings.selectedOllamaModel = model
+                                settingsManager.saveSettings()
+                            }) {
+                                Text(model)
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Text(ollamaManager.availableModels.isEmpty ? "No models detected" : (settingsManager.settings.selectedOllamaModel ?? "Select a model"))
+                                .font(.system(size: 13, design: .monospaced))
+                                .foregroundColor(settingsManager.settings.llmMode == "local" ? .primary : .secondary)
+                            Spacer()
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 12))
+                                .foregroundColor(settingsManager.settings.llmMode == "local" ? .secondary : .secondary.opacity(0.5))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5)
+                                .stroke(Color.gray.opacity(settingsManager.settings.llmMode == "local" ? 0.5 : 0.3), lineWidth: 1)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 5)
+                                        .fill(settingsManager.settings.llmMode == "local" ? Color.clear : Color.gray.opacity(0.1))
+                                )
+                        )
+                    }
+                    .disabled(settingsManager.settings.llmMode != "local")
+                    .padding(.horizontal, 24)
+                    
+                    // Always maintain consistent spacing with a container
+                    HStack {
+                        if settingsManager.settings.llmMode == "local" || ollamaManager.isPulling {
+                            if !ollamaManager.isOllamaInstalled {
+                                // Ollama not installed message
+                                HStack(spacing: 6) {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundColor(.yellow)
+                                        .font(.system(size: 13))
+                                    
+                                    Text("Ollama is not installed. Visit ")
+                                        .font(.system(size: 13, weight: .medium))
+                                        .foregroundColor(.primary)
+                                    +
+                                    Text("https://ollama.com/download")
+                                        .font(.system(size: 13, weight: .medium))
+                                        .foregroundColor(.blue)
+                                        .underline()
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(Color.yellow.opacity(0.15))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .stroke(Color.yellow.opacity(0.8), lineWidth: 1)
+                                        )
+                                )
+                                .onTapGesture {
+                                    if let url = URL(string: "https://ollama.com/download") {
+                                        NSWorkspace.shared.open(url)
+                                    }
+                                }
+                            } else if !ollamaManager.availableModels.contains("smollm2:latest") {
+                                // No models message with install button
+                                VStack(alignment: .leading, spacing: 4) {
+                                    HStack(spacing: 8) {
+                                        // Expandable warning box
+                                        HStack(spacing: 6) {
+                                            if !ollamaManager.isPulling {
+                                                Image(systemName: "exclamationmark.triangle.fill")
+                                                    .foregroundColor(.yellow)
+                                                    .font(.system(size: 13))
+                                            }
+                                            
+                                            Text(ollamaManager.isPulling ? ollamaManager.pullProgress : "Recommended model: smollm2")
+                                                .font(.system(size: 12, weight: .medium))
+                                                .foregroundColor(.primary)
+                                            
+                                            // Show progress bar and percentage when pulling
+                                            if ollamaManager.isPulling {
+                                                ProgressView(value: ollamaManager.pullPercentage, total: 100)
+                                                    .progressViewStyle(LinearProgressViewStyle(tint: .black))
+                                                    .background(Color.clear)
+                                                
+                                                Text(String(format: "%.0f%%", ollamaManager.pullPercentage))
+                                                    .font(.system(size: 11, weight: .medium))
+                                                    .foregroundColor(.primary)
+                                                    .frame(width: 30, alignment: .trailing)
+                                            } else {
+                                                Spacer() // This makes the warning box expand
+                                            }
+                                        }
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 6)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 6)
+                                                .fill(ollamaManager.isPulling ? Color.gray.opacity(0.1) : Color.yellow.opacity(0.15))
+                                                .overlay(
+                                                    RoundedRectangle(cornerRadius: 6)
+                                                        .stroke(ollamaManager.isPulling ? Color.black : Color.yellow.opacity(0.8), lineWidth: 1)
+                                                )
+                                        )
+                                        
+                                        // Fixed-width install button (hidden when pulling)
+                                        if !ollamaManager.isPulling {
+                                            Text("Install")
+                                                .font(.system(size: 12, weight: .medium))
+                                                .foregroundColor(.white)
+                                                .padding(.horizontal, 16)
+                                                .padding(.vertical, 6)
+                                                .background(
+                                                    RoundedRectangle(cornerRadius: 6)
+                                                        .fill(Color.black)
+                                                )
+                                                .onTapGesture {
+                                                    Task {
+                                                        await ollamaManager.pullModel("smollm2:latest")
+                                                    }
+                                                }
+                                                .onHover { isHovering in
+                                                    if isHovering {
+                                                        NSCursor.pointingHand.push()
+                                                    } else {
+                                                        NSCursor.pop()
+                                                    }
+                                                }
+                                        }
+                                    }
+                                    
+                                    // Caption text that appears only when pulling - aligned with box edge
+                                    if ollamaManager.isPulling {
+                                        HStack(spacing: 2) {
+                                            Text("You can safely close the modal. Your download will continue.")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        .padding(.top, 2)
+                                    }
+                                }
+                                .padding(.top, ollamaManager.isPulling ? 14 : -8)
+                            } else {
+                                // Empty placeholder to maintain spacing
+                                Color.clear
+                            }
                         } else {
-                            enterEditMode()
+                            // Empty placeholder to maintain spacing
+                            Color.clear
                         }
-                    }) {
-                        Text(isEditingMode ? "Save" : "Edit")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(colorScheme == .dark ? Color.black : .primary)
-                            )
                     }
-                    .buttonStyle(PlainButtonStyle())
-                    
-                    if showOpenAISaveConfirmation {
-                        HStack(spacing: 6) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(.green)
-                                .font(.system(size: 12))
-                            Text("Saved")
-                                .font(.system(size: 12))
-                                .foregroundColor(.secondary)
-                        }
-                        .transition(.opacity)
-                    }
+                    .frame(minHeight: 32) // Minimum height to prevent jumping, but allow expansion
+                    .padding(.leading, 24)
+                    .padding(.top, 4)
                 }
-                .animation(.easeInOut(duration: 0.2), value: showOpenAISaveConfirmation)
             }
+                .frame(maxWidth: 400)
+                .onAppear {
+                    // Check Ollama installation status when settings view appears
+                    ollamaManager.checkServerStatus { _ in }
+                    // Set settings manager reference for auto-selection
+                    ollamaManager.settingsManager = settingsManager
+                }
+                Spacer()
+            }
+            .frame(maxHeight: .infinity)
             
-            Spacer()
+            // Remote Configuration - Bottom Half
+            VStack {
+                Spacer()
+                VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    Image(systemName: settingsManager.settings.llmMode == "remote" ? "checkmark.square.fill" : "square")
+                        .foregroundColor(settingsManager.settings.llmMode == "remote" ? .blue : .secondary)
+                        .font(.system(size: 16))
+                        .onTapGesture {
+                            settingsManager.settings.llmMode = "remote"
+                            settingsManager.saveSettings()
+                        }
+                        .onHover { isHovering in
+                            if isHovering {
+                                NSCursor.pointingHand.push()
+                            } else {
+                                NSCursor.pop()
+                            }
+                        }
+                    
+                    Text("Remote")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.primary)
+                    
+                    Spacer()
+                }
+                .padding(.leading, 24)
+                
+                Text("Powered by OpenAI. Connect to their latest model.")
+                    .font(.system(size: 13))
+                    .foregroundColor(.secondary)
+                    .padding(.leading, 24)
+                
+                // OpenAI API Key Input
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("OpenAI API Key")
+                        .font(.system(size: 13))
+                        .foregroundColor(settingsManager.settings.llmMode == "remote" ? .primary : .secondary)
+                        .padding(.leading, 24)
+                    
+                    SecureField(isEditingMode ? "Enter your OpenAI API key" : "••••••••••••••••••••", text: $tempOpenAIApiKey)
+                        .textFieldStyle(PlainTextFieldStyle())
+                        .font(.system(size: 13, design: .monospaced))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5)
+                                .stroke(Color.gray.opacity(settingsManager.settings.llmMode == "remote" && isEditingMode ? 0.5 : 0.3), lineWidth: 1)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 5)
+                                        .fill(settingsManager.settings.llmMode == "remote" && isEditingMode ? Color.clear : Color.gray.opacity(0.1))
+                                )
+                        )
+                        .foregroundColor(settingsManager.settings.llmMode == "remote" && isEditingMode ? .primary : .secondary)
+                        .disabled(settingsManager.settings.llmMode != "remote" || !isEditingMode)
+                        .onChange(of: tempOpenAIApiKey) { newValue in
+                            if isEditingMode {
+                                hasUnsavedOpenAI = (newValue != openAIAPIKey)
+                            }
+                        }
+                        .padding(.horizontal, 24)
+                    
+                    HStack(spacing: 2) {
+                        Text("Get your key at")
+                            .font(.caption)
+                            .foregroundColor(settingsManager.settings.llmMode == "remote" ? .secondary : .secondary.opacity(0.5))
+                        
+                        Link("platform.openai.com/api-keys", destination: URL(string: "https://platform.openai.com/api-keys")!)
+                            .font(.caption)
+                            .foregroundColor(settingsManager.settings.llmMode == "remote" ? .blue : .blue.opacity(0.5))
+                            .disabled(settingsManager.settings.llmMode != "remote")
+                    }
+                    .padding(.leading, 24)
+                    
+                    HStack(spacing: 12) {
+                        Button(action: {
+                            if isEditingMode {
+                                saveAndExitEditMode()
+                            } else if settingsManager.settings.llmMode == "remote" {
+                                enterEditMode()
+                            }
+                        }) {
+                            Text(isEditingMode ? "Save" : "Edit")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(settingsManager.settings.llmMode == "remote" ? .white : .white.opacity(0.8))
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(settingsManager.settings.llmMode == "remote" ? (colorScheme == .dark ? Color.black : .primary) : Color.gray.opacity(0.5))
+                                )
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                        .disabled(settingsManager.settings.llmMode != "remote")
+                        
+                        if showOpenAISaveConfirmation {
+                            HStack(spacing: 6) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                                    .font(.system(size: 12))
+                                Text("Saved")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                            }
+                            .transition(.opacity)
+                        }
+                    }
+                    .animation(.easeInOut(duration: 0.2), value: showOpenAISaveConfirmation)
+                    .padding(.leading, 24)
+                }
+            }
+                .frame(maxWidth: 400)
+                Spacer()
+            }
+            .frame(maxHeight: .infinity)
         }
         .padding(.top, 8)
         .onAppear {
@@ -4045,6 +5020,25 @@ struct APIKeysSettingsView: View {
             tempOpenAIApiKey = ""
             hasUnsavedOpenAI = false
             isEditingMode = false
+            
+            // If local mode is selected, start Ollama server and fetch models
+            if settingsManager.settings.llmMode == "local" {
+                ollamaManager.ensureServerRunning { success, error in
+                    if success {
+                        ollamaManager.fetchAvailableModels { _ in }
+                    }
+                }
+            }
+        }
+        .onChange(of: settingsManager.settings.llmMode) { newMode in
+            if newMode == "local" {
+                // Start Ollama server when switching to local mode
+                ollamaManager.ensureServerRunning { success, error in
+                    if success {
+                        ollamaManager.fetchAvailableModels { _ in }
+                    }
+                }
+            }
         }
     }
 }
@@ -4100,7 +5094,7 @@ struct ReflectionsSettingsView: View {
                     .font(.headline)
                     .fontWeight(.semibold)
                 
-                HStack(spacing: 16) {
+                HStack(spacing: 8) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("From")
                             .font(.caption)
@@ -4151,7 +5145,7 @@ struct ReflectionsSettingsView: View {
                     .font(.headline)
                     .fontWeight(.semibold)
                 
-                HStack(spacing: 16) {
+                HStack(spacing: 8) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("From")
                             .font(.caption)
@@ -4202,7 +5196,7 @@ struct ReflectionsSettingsView: View {
                     .font(.headline)
                     .fontWeight(.semibold)
                 
-                HStack(spacing: 16) {
+                HStack(spacing: 8) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("From")
                             .font(.caption)
@@ -4253,7 +5247,7 @@ struct ReflectionsSettingsView: View {
                     .font(.headline)
                     .fontWeight(.semibold)
                 
-                HStack(spacing: 16) {
+                HStack(spacing: 8) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("From")
                             .font(.caption)

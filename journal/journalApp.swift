@@ -45,6 +45,14 @@ struct journalApp: App {
                 }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
             }
+            
+            CommandGroup(after: .appSettings) {
+                Button("Toggle Settings Modal") {
+                    // Send notification to toggle settings
+                    NotificationCenter.default.post(name: NSNotification.Name("ToggleSettings"), object: nil)
+                }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+            }
         }
     }
 }
