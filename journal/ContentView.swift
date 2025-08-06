@@ -268,6 +268,7 @@ class OllamaManager: ObservableObject {
     @Published var pullProgress: String = ""
     @Published var pullPercentage: Double = 0.0
     @Published var isOllamaInstalled: Bool = true  // Assume installed initially
+    @Published var isFetchingModels: Bool = false
     
     private let baseURL = "http://localhost:11434"
     internal var serverProcess: Process?
@@ -533,8 +534,14 @@ class OllamaManager: ObservableObject {
     
     // Fetch available models
     func fetchAvailableModels(completion: @escaping ([String]) -> Void) {
+        DispatchQueue.main.async {
+            self.isFetchingModels = true
+        }
         checkServerStatus { isRunning in
             guard isRunning else {
+                DispatchQueue.main.async {
+                    self.isFetchingModels = false
+                }
                 completion([])
                 return
             }
@@ -546,16 +553,67 @@ class OllamaManager: ObservableObject {
                     guard let data = data,
                           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                           let models = json["models"] as? [[String: Any]] else {
+                        self.isFetchingModels = false
                         completion([])
                         return
                     }
                     
                     let modelNames = models.compactMap { $0["name"] as? String }
                     self.availableModels = modelNames
+                    self.isFetchingModels = false
                     completion(modelNames)
                 }
             }
             task.resume()
+        }
+    }
+    
+    // Fetch models from local ollama without requiring server
+    func fetchLocalModels(completion: @escaping ([String]) -> Void) {
+        DispatchQueue.main.async {
+            self.isFetchingModels = true
+        }
+        DispatchQueue.global(qos: .background).async {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/local/bin/ollama")
+            task.arguments = ["list"]
+            
+            let pipe = Pipe()
+            task.standardOutput = pipe
+            task.standardError = Pipe() // Silence errors
+            
+            do {
+                try task.run()
+                task.waitUntilExit()
+                
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8) ?? ""
+                
+                // Parse the output - skip the header line and extract model names
+                let lines = output.split(separator: "\n")
+                var modelNames: [String] = []
+                
+                for (index, line) in lines.enumerated() {
+                    if index == 0 { continue } // Skip header
+                    let components = line.split(separator: " ", maxSplits: 1)
+                    if let modelName = components.first {
+                        modelNames.append(String(modelName))
+                    }
+                }
+                
+                DispatchQueue.main.async {
+                    self.availableModels = modelNames
+                    self.isFetchingModels = false
+                    completion(modelNames)
+                    print("📦 Found \(modelNames.count) local models: \(modelNames)")
+                }
+            } catch {
+                print("❌ Failed to fetch local models: \(error)")
+                DispatchQueue.main.async {
+                    self.isFetchingModels = false
+                    completion([])
+                }
+            }
         }
     }
     
@@ -643,8 +701,9 @@ class OllamaManager: ObservableObject {
         pullProgress = ""
         pullPercentage = 0.0
         
-        // Clear models list
+        // Clear models list and set loading state
         availableModels = []
+        isFetchingModels = true
         
         // Clear stream buffer
         streamBuffer = ""
@@ -1112,13 +1171,12 @@ struct ContentView: View {
     /// Asynchronously checks if local models are available and updates the models list
     private func checkLocalModelAvailability(completion: @escaping (Bool) -> Void) {
         if settingsManager.settings.llmMode == "local" {
-            OllamaManager.shared.fetchAvailableModels { models in
-                DispatchQueue.main.async {
-                    if let selectedModel = self.settingsManager.settings.selectedOllamaModel {
-                        completion(models.contains(selectedModel))
-                    } else {
-                        completion(false)
-                    }
+            // Use fetchLocalModels which doesn't require server
+            OllamaManager.shared.fetchLocalModels { models in
+                if let selectedModel = self.settingsManager.settings.selectedOllamaModel {
+                    completion(models.contains(selectedModel))
+                } else {
+                    completion(false)
                 }
             }
         } else {
@@ -5028,8 +5086,9 @@ struct SettingsContent: View {
         .onChange(of: selectedTab) { newTab in
             if newTab == .apiKeys {
                 // Refresh available models when switching to LLM tab
-                OllamaManager.shared.fetchAvailableModels { models in
-                    DispatchQueue.main.async {
+                if settingsManager.settings.llmMode == "local" {
+                    // Use local model detection for local mode
+                    OllamaManager.shared.fetchLocalModels { models in
                         // Check if the currently selected model is still available
                         if let selectedModel = settingsManager.settings.selectedOllamaModel,
                            !models.contains(selectedModel),
@@ -5039,6 +5098,9 @@ struct SettingsContent: View {
                             settingsManager.saveSettings()
                         }
                     }
+                } else {
+                    // For remote mode, just ensure clean state
+                    OllamaManager.shared.resetState()
                 }
             }
         }
@@ -5089,7 +5151,7 @@ struct ModelSelectionMenu: View {
             }
         } label: {
             HStack {
-                Text(ollamaManager.availableModels.isEmpty ? "No models detected" : (settingsManager.settings.selectedOllamaModel ?? "Select a model"))
+                Text(ollamaManager.isFetchingModels ? "..." : (ollamaManager.availableModels.isEmpty ? "No models detected" : (settingsManager.settings.selectedOllamaModel ?? "Select a model")))
                     .font(.system(size: 13, design: .monospaced))
                     .foregroundColor(.primary)
                     .allowsHitTesting(false)
@@ -5129,7 +5191,7 @@ struct OllamaStatusView: View {
     
     var body: some View {
         VStack {
-            if ollamaManager.isPulling || !ollamaManager.isOllamaInstalled || !ollamaManager.availableModels.contains("smollm2:latest") {
+            if !ollamaManager.isFetchingModels && (ollamaManager.isPulling || !ollamaManager.isOllamaInstalled || !ollamaManager.availableModels.contains("smollm2:latest")) {
                 if !ollamaManager.isOllamaInstalled {
                     OllamaNotInstalledView(ollamaManager: ollamaManager)
                 } else if !ollamaManager.availableModels.contains("smollm2:latest") {
@@ -5536,7 +5598,22 @@ struct APIKeysSettingsView: View {
             // Initialize state based on current mode
             if settingsManager.settings.llmMode == "local" {
                 print("🔍 Configuration view appeared with Local mode active")
-                ollamaManager.fetchAvailableModels { _ in }
+                // Fetch models immediately without waiting for server
+                ollamaManager.fetchLocalModels { models in
+                    print("✅ Local models loaded: \(models)")
+                }
+                // Start server in background if needed
+                ollamaManager.checkServerStatus { isRunning in
+                    if !isRunning {
+                        ollamaManager.startServer { success, error in
+                            if success {
+                                print("✅ Server started in background")
+                            } else {
+                                print("⚠️ Server couldn't start, but models are available: \(error ?? "Unknown error")")
+                            }
+                        }
+                    }
+                }
             } else {
                 print("🔍 Configuration view appeared with Remote mode active")
                 // Ensure clean state when in remote mode
@@ -5545,15 +5622,22 @@ struct APIKeysSettingsView: View {
         }
         .onChange(of: settingsManager.settings.llmMode) { newMode in
             if newMode == "local" {
-                // Switching TO local mode: reset state, start server, fetch models
+                // Switching TO local mode: fetch models first, then start server
                 print("🔄 Switching to Local mode")
-                ollamaManager.resetState()
-                ollamaManager.ensureServerRunning { success, error in
-                    if success {
-                        print("✅ Server started, fetching available models")
-                        ollamaManager.fetchAvailableModels { _ in }
-                    } else {
-                        print("❌ Failed to start server: \(error ?? "Unknown error")")
+                
+                // Fetch models immediately
+                ollamaManager.fetchLocalModels { models in
+                    print("✅ Local models loaded: \(models)")
+                }
+                
+                // Start server in background (don't wait)
+                DispatchQueue.global(qos: .background).async {
+                    ollamaManager.ensureServerRunning { success, error in
+                        if success {
+                            print("✅ Server started in background")
+                        } else {
+                            print("⚠️ Server couldn't start, but models are available: \(error ?? "Unknown error")")
+                        }
                     }
                 }
             } else {
