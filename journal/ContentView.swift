@@ -17,6 +17,31 @@ import Network
 
 extension Color {
     static let lightModeBackground = Color(red: 247/255, green: 246/255, blue: 243/255)
+    
+    init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&int)
+        let a, r, g, b: UInt64
+        switch hex.count {
+        case 3: // RGB (12-bit)
+            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
+        case 6: // RGB (24-bit)
+            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
+        case 8: // ARGB (32-bit)
+            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+        default:
+            (a, r, g, b) = (1, 1, 1, 0)
+        }
+
+        self.init(
+            .sRGB,
+            red: Double(r) / 255,
+            green: Double(g) / 255,
+            blue:  Double(b) / 255,
+            opacity: Double(a) / 255
+        )
+    }
 }
 
 struct HumanEntry: Identifiable {
@@ -1023,6 +1048,7 @@ struct ContentView: View {
     @State private var selectedEntryIndex: Int = 0
     @State private var scrollOffset: CGFloat = 0
     @State private var selectedEntryId: UUID? = nil
+    @State private var manuallySelectedEntryId: UUID? = nil
     @State private var hoveredEntryId: UUID? = nil
     @State private var showingChatMenu = false
     @State private var chatMenuAnchor: CGPoint = .zero
@@ -3279,7 +3305,24 @@ struct ContentView: View {
                     }
                 }
                 
+                // Handle arrow keys for entry navigation when an entry is manually selected
+                if manuallySelectedEntryId != nil && !showingCommandBar {
+                    if event.keyCode == 125 { // Down arrow
+                        navigateToNextEntry()
+                        return nil // Consume the event
+                    } else if event.keyCode == 126 { // Up arrow
+                        navigateToPreviousEntry()
+                        return nil // Consume the event
+                    }
+                }
+                
                 return event
+            }
+            
+            // Global click monitor - default to clearing selection, sidebar entries will override
+            NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { event in
+                manuallySelectedEntryId = nil
+                return event // Let the event continue to reach button actions
             }
             
             // Add notification listeners for menu commands
@@ -3592,15 +3635,24 @@ struct ContentView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    ForEach(entries) { entry in
+                    ForEach(entries.indices, id: \.self) { index in
+                        let entry = entries[index]
                         sidebarEntryRow(entry: entry)
                             .id(entry.id)
-                        if entry.id != entries.last?.id {
+
+                        // let isHovered = entry.id == hoveredEntryId || entries[index + 1].id == hoveredEntryId
+                        let isSelected = entry.id == selectedEntryId || entries[index + 1].id == selectedEntryId
+                        let isManuallySelected = entry.id == manuallySelectedEntryId || entries[index + 1].id == manuallySelectedEntryId
+
+                        if index != entries.indices.last {
                             Divider()
+                                .opacity(isManuallySelected ? 0 : 1)
+                                .padding(.horizontal, isSelected ? 0 : 12)
                         }
+                        
                     }
-                    // Add bottom padding spacer with ID for scrolling to very bottom
-                    VStack { 
+                    
+                    VStack {
                         Spacer().frame(height: 50)
                     }
                     .id("bottom-padding")
@@ -3625,6 +3677,9 @@ struct ContentView: View {
     @ViewBuilder
     private func sidebarEntryRow(entry: HumanEntry) -> some View {
         Button(action: {
+            // Set manual selection when entry is clicked
+            manuallySelectedEntryId = entry.id
+            
             if !isStreamingReflection && selectedEntryId != entry.id {
                 // Save current entry before switching
                 if let currentId = selectedEntryId,
@@ -3707,11 +3762,12 @@ struct ContentView: View {
                         .foregroundColor(.secondary)
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
             .background(
                 RoundedRectangle(cornerRadius: 4)
                     .fill(backgroundColor(for: entry))
+                    .padding(.horizontal, entry.id == manuallySelectedEntryId ? 8 : 0)
             )
         }
         .buttonStyle(PlainButtonStyle())
@@ -3816,7 +3872,9 @@ struct ContentView: View {
     }
     
     private func backgroundColor(for entry: HumanEntry) -> Color {
-        if entry.id == selectedEntryId {
+        if entry.id == manuallySelectedEntryId {
+            return Color(red: 0.8863, green: 0.8471, blue: 0.8078)
+        } else if entry.id == selectedEntryId {
             return Color.gray.opacity(0.1)  // More subtle selection highlight
         } else if entry.id == hoveredEntryId {
             return Color.gray.opacity(0.05)  // Even more subtle hover state
@@ -4122,6 +4180,64 @@ struct ContentView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             self.isUserEditorFocused = true
         }
+    }
+    
+    private func navigateToNextEntry() {
+        guard let currentId = manuallySelectedEntryId,
+              let currentIndex = entries.firstIndex(where: { $0.id == currentId }) else {
+            return
+        }
+        
+        let nextIndex = currentIndex + 1
+        let nextEntry: HumanEntry
+        
+        if nextIndex >= entries.count {
+            // Wrap to the first entry
+            nextEntry = entries.first!
+        } else {
+            nextEntry = entries[nextIndex]
+        }
+        
+        // Update both manual selection and load the entry
+        manuallySelectedEntryId = nextEntry.id
+        
+        // Save current entry before switching
+        if let currentEntry = entries.first(where: { $0.id == selectedEntryId }) {
+            saveEntry(entry: currentEntry)
+            updatePreviewText(for: currentEntry)
+        }
+        
+        selectedEntryId = nextEntry.id
+        loadEntry(entry: nextEntry)
+    }
+    
+    private func navigateToPreviousEntry() {
+        guard let currentId = manuallySelectedEntryId,
+              let currentIndex = entries.firstIndex(where: { $0.id == currentId }) else {
+            return
+        }
+        
+        let previousIndex = currentIndex - 1
+        let previousEntry: HumanEntry
+        
+        if previousIndex < 0 {
+            // Wrap to the last entry
+            previousEntry = entries.last!
+        } else {
+            previousEntry = entries[previousIndex]
+        }
+        
+        // Update both manual selection and load the entry
+        manuallySelectedEntryId = previousEntry.id
+        
+        // Save current entry before switching
+        if let currentEntry = entries.first(where: { $0.id == selectedEntryId }) {
+            saveEntry(entry: currentEntry)
+            updatePreviewText(for: currentEntry)
+        }
+        
+        selectedEntryId = previousEntry.id
+        loadEntry(entry: previousEntry)
     }
     
     private func deleteEntry(entry: HumanEntry) {
