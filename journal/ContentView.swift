@@ -3323,6 +3323,14 @@ struct ContentView: View {
                     showingSettings.toggle()
                 }
             }
+            
+            NotificationCenter.default.addObserver(
+                forName: NSNotification.Name("CreateNewEntry"),
+                object: nil,
+                queue: .main
+            ) { _ in
+                createNewEntry()
+            }
         }
     }
     

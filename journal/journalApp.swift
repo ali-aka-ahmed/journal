@@ -30,6 +30,14 @@ struct journalApp: App {
         .windowToolbarStyle(.unifiedCompact)
         .windowResizability(.contentSize)
         .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("New Entry") {
+                    // Send notification to create new entry
+                    NotificationCenter.default.post(name: NSNotification.Name("CreateNewEntry"), object: nil)
+                }
+                .keyboardShortcut("n", modifiers: .command)
+            }
+            
             CommandGroup(replacing: .sidebar) {
                 Button("Toggle Sidebar") {
                     // Send notification to toggle sidebar
