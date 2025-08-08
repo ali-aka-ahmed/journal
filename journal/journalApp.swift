@@ -106,17 +106,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.global(qos: .background).async {
                     OllamaManager.shared.ensureServerRunning { success, error in
                         if success {
-                            print("✅ Ollama server started successfully at app launch")
+        print("✅ Ollama server started successfully at app launch")
                             // Fetch available models
                             OllamaManager.shared.fetchAvailableModels { _ in }
                         } else {
-                            print("❌ Failed to start Ollama server at app launch: \(error ?? "Unknown error")")
+        print("❌ Failed to start Ollama server at app launch: \(error ?? "Unknown error")")
                         }
                     }
                 }
             }
         } catch {
-            print("Error loading settings for Ollama startup: \(error)")
+        print("Error loading settings for Ollama startup: \(error)")
         }
     }
     
@@ -143,28 +143,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupTerminationHandlers() {
         // Handle SIGTERM (normal termination)
         signal(SIGTERM) { _ in
-            print("🔴 Received SIGTERM, killing Ollama server...")
+        print("🔴 Received SIGTERM, killing Ollama server...")
             AppDelegate.emergencyCleanup()
             exit(0)
         }
         
         // Handle SIGINT (Ctrl+C, force quit)
         signal(SIGINT) { _ in
-            print("🔴 Received SIGINT, killing Ollama server...")
+        print("🔴 Received SIGINT, killing Ollama server...")
             AppDelegate.emergencyCleanup()
             exit(0)
         }
         
         // Handle SIGHUP (terminal closed)
         signal(SIGHUP) { _ in
-            print("🔴 Received SIGHUP, killing Ollama server...")
+        print("🔴 Received SIGHUP, killing Ollama server...")
             AppDelegate.emergencyCleanup()
             exit(0)
         }
         
         // Handle SIGQUIT (quit signal)
         signal(SIGQUIT) { _ in
-            print("🔴 Received SIGQUIT, killing Ollama server...")
+        print("🔴 Received SIGQUIT, killing Ollama server...")
             AppDelegate.emergencyCleanup()
             exit(0)
         }
@@ -190,7 +190,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Check if this is the last window
         if NSApplication.shared.windows.count <= 1 {
-            print("🔴 Last window closing, terminating app...")
+        print("🔴 Last window closing, terminating app...")
             NSApplication.shared.terminate(nil)
         }
     }
@@ -202,7 +202,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Get the PID if we have a process
         if let process = manager.serverProcess {
             let pid = process.processIdentifier
-            print("🔴 Emergency cleanup: Killing Ollama PID \(pid)")
+        print("🔴 Emergency cleanup: Killing Ollama PID \(pid)")
             
             // Force kill the process immediately
             kill(pid, SIGKILL)
@@ -213,9 +213,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             killTask.arguments = ["-9", "\(pid)"]
             try? killTask.run()
             
-            print("🔴 Emergency cleanup completed for PID \(pid)")
+        print("🔴 Emergency cleanup completed for PID \(pid)")
         } else {
-            print("🔴 Emergency cleanup: No Ollama process found")
+        print("🔴 Emergency cleanup: No Ollama process found")
         }
         
         // Clean up the manager state

@@ -110,9 +110,9 @@ class SettingsManager: ObservableObject {
         if !FileManager.default.fileExists(atPath: documentsDirectory.path) {
             do {
                 try FileManager.default.createDirectory(at: documentsDirectory, withIntermediateDirectories: true)
-                print("Created Journal directory at: \(documentsDirectory.path)")
+        print("Created Journal directory at: \(documentsDirectory.path)")
             } catch {
-                print("Error creating Journal directory: \(error)")
+        print("Error creating Journal directory: \(error)")
             }
         }
         
@@ -122,23 +122,23 @@ class SettingsManager: ObservableObject {
         // Save default settings if file doesn't exist
         if !FileManager.default.fileExists(atPath: settingsURL.path) {
             saveSettings()
-            print("Created default Settings.json at: \(settingsURL.path)")
+        print("Created default Settings.json at: \(settingsURL.path)")
         }
     }
     
     private static func loadSettings(from url: URL) -> AppSettings {
         guard FileManager.default.fileExists(atPath: url.path) else {
-            print("Settings file not found, using defaults")
+        print("Settings file not found, using defaults")
             return AppSettings.default
         }
         
         do {
             let data = try Data(contentsOf: url)
             let settings = try JSONDecoder().decode(AppSettings.self, from: data)
-            print("Successfully loaded settings from: \(url.path)")
+        print("Successfully loaded settings from: \(url.path)")
             return settings
         } catch {
-            print("Error loading settings: \(error), using defaults")
+        print("Error loading settings: \(error), using defaults")
             return AppSettings.default
         }
     }
@@ -147,9 +147,9 @@ class SettingsManager: ObservableObject {
         do {
             let data = try JSONEncoder().encode(settings)
             try data.write(to: settingsURL)
-            print("Settings saved to: \(settingsURL.path)")
+        print("Settings saved to: \(settingsURL.path)")
         } catch {
-            print("Error saving settings: \(error)")
+        print("Error saving settings: \(error)")
         }
     }
     
@@ -203,14 +203,14 @@ class KeychainHelper {
             
             let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
             if addStatus != errSecSuccess {
-                print("🔴 Failed to add API key to Keychain for account \(type.rawValue): \(addStatus)")
+        print("🔴 Failed to add API key to Keychain for account \(type.rawValue): \(addStatus)")
             } else {
-                print("✅ Successfully added API key to Keychain for account \(type.rawValue)")
+        print("✅ Successfully added API key to Keychain for account \(type.rawValue)")
             }
         } else if updateStatus == errSecSuccess {
-            print("✅ Successfully updated API key in Keychain for account \(type.rawValue)")
+        print("✅ Successfully updated API key in Keychain for account \(type.rawValue)")
         } else {
-            print("🔴 Failed to update API key in Keychain for account \(type.rawValue): \(updateStatus)")
+        print("🔴 Failed to update API key in Keychain for account \(type.rawValue): \(updateStatus)")
         }
     }
     
@@ -232,12 +232,12 @@ class KeychainHelper {
         if status == errSecSuccess,
            let data = result as? Data,
            let key = String(data: data, encoding: .utf8) {
-            print("🔍 Successfully loaded API key from keychain: '\(key)'")
+        print("🔍 Successfully loaded API key from keychain: '\(key)'")
             return key
         } else if status == errSecItemNotFound {
-            print("🔍 API key not found in keychain")
+        print("🔍 API key not found in keychain")
         } else {
-            print("🔍 Failed to load API key from keychain: \(status)")
+        print("🔍 Failed to load API key from keychain: \(status)")
         }
         
         return nil
@@ -273,11 +273,11 @@ class KeychainHelper {
         print("🗑️ KeychainHelper.deleteAPIKey: status = \(status) for account \(type.rawValue)")
         
         if status == errSecSuccess {
-            print("🗑️ Successfully deleted API key from keychain")
+        print("🗑️ Successfully deleted API key from keychain")
         } else if status == errSecItemNotFound {
-            print("🗑️ API key not found in keychain (already deleted)")
+        print("🗑️ API key not found in keychain (already deleted)")
         } else {
-            print("🗑️ Failed to delete API key from keychain: \(status)")
+        print("🗑️ Failed to delete API key from keychain: \(status)")
         }
     }
 }
@@ -319,7 +319,7 @@ class OllamaManager: ObservableObject {
         }
         
         guard installed else {
-            print("❌ Ollama not installed, server cannot be running")
+        print("❌ Ollama not installed, server cannot be running")
             DispatchQueue.main.async {
                 self.isServerRunning = false
                 completion(false)
@@ -333,22 +333,22 @@ class OllamaManager: ObservableObject {
         let task = URLSession.shared.dataTask(with: url) { data, response, error in
             DispatchQueue.main.async {
                 if let error = error {
-                    print("❌ Connection error: \(error.localizedDescription)")
+        print("❌ Connection error: \(error.localizedDescription)")
                     self.isServerRunning = false
                     completion(false)
                 } else if let httpResponse = response as? HTTPURLResponse {
-                    print("📡 HTTP Response: \(httpResponse.statusCode)")
+        print("📡 HTTP Response: \(httpResponse.statusCode)")
                     if httpResponse.statusCode == 200 {
-                        print("✅ Ollama server is running and responding")
+        print("✅ Ollama server is running and responding")
                         self.isServerRunning = true
                         completion(true)
                     } else {
-                        print("❌ Ollama server returned status code: \(httpResponse.statusCode)")
+        print("❌ Ollama server returned status code: \(httpResponse.statusCode)")
                         self.isServerRunning = false
                         completion(false)
                     }
                 } else {
-                    print("❌ No HTTP response received")
+        print("❌ No HTTP response received")
                     self.isServerRunning = false
                     completion(false)
                 }
@@ -364,17 +364,17 @@ class OllamaManager: ObservableObject {
         // First check if it's already running
         checkServerStatus { isRunning in
             if isRunning {
-                print("✅ Ollama server is already running")
+        print("✅ Ollama server is already running")
                 completion(true, nil)
                 return
             }
             
-            print("🟡 Server not running, attempting to start...")
+        print("🟡 Server not running, attempting to start...")
             
             // Check if port 11434 is already in use
             if self.isPortInUse(11434) {
                 let error = "Port 11434 is already in use by another process. Please stop the conflicting process or restart your system."
-                print("❌ \(error)")
+        print("❌ \(error)")
                 completion(false, error)
                 return
             }
@@ -382,12 +382,12 @@ class OllamaManager: ObservableObject {
             // Find Ollama executable
             guard let ollamaPath = self.findOllamaExecutable() else {
                 let error = "Ollama executable not found in common paths"
-                print("❌ \(error)")
+        print("❌ \(error)")
                 completion(false, error)
                 return
             }
             
-            print("🟢 Found Ollama at: \(ollamaPath)")
+        print("🟢 Found Ollama at: \(ollamaPath)")
             
             // Try to start the server
             let process = Process()
@@ -404,12 +404,12 @@ class OllamaManager: ObservableObject {
             process.standardError = errorPipe
             
             do {
-                print("🟡 Launching: \(ollamaPath) serve")
+        print("🟡 Launching: \(ollamaPath) serve")
                 process.launch()  // Use launch() instead of run() for non-blocking execution
                 self.serverProcess = process
                 
-                print("🟡 Process launched with PID: \(process.processIdentifier)")
-                print("🟡 Server starting in background...")
+        print("🟡 Process launched with PID: \(process.processIdentifier)")
+        print("🟡 Server starting in background...")
                 
                 // Return immediately to avoid blocking UI
                 completion(true, nil)
@@ -421,8 +421,8 @@ class OllamaManager: ObservableObject {
                 
             } catch {
                 let errorMsg = "Failed to launch Ollama: \(error.localizedDescription)"
-                print("❌ \(errorMsg)")
-                print("📝 Error details: \(error)")
+        print("❌ \(errorMsg)")
+        print("📝 Error details: \(error)")
                 completion(false, errorMsg)
             }
         }
@@ -449,15 +449,15 @@ class OllamaManager: ObservableObject {
             let isInUse = !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             
             if isInUse {
-                print("⚠️ Port \(port) is already in use:")
-                print(output)
+        print("⚠️ Port \(port) is already in use:")
+        print(output)
             } else {
-                print("✅ Port \(port) is available")
+        print("✅ Port \(port) is available")
             }
             
             return isInUse
         } catch {
-            print("📝 Failed to check port status: \(error)")
+        print("📝 Failed to check port status: \(error)")
             return false
         }
     }
@@ -499,7 +499,7 @@ class OllamaManager: ObservableObject {
                 }
             }
         } catch {
-            print("📝 Failed to run 'which ollama': \(error)")
+        print("📝 Failed to run 'which ollama': \(error)")
         }
         
         return nil
@@ -512,28 +512,28 @@ class OllamaManager: ObservableObject {
         checkServerStatus { isRunning in
             DispatchQueue.main.async {
                 if isRunning {
-                    print("✅ Ollama server is healthy and responding!")
+        print("✅ Ollama server is healthy and responding!")
                     self.isServerRunning = true
                     // Optionally fetch available models
                     self.fetchAvailableModels { _ in }
                 } else if retryCount < maxRetries {
-                    print("🔄 Server not ready yet, retrying in \(retryDelay)s... (attempt \(retryCount + 1)/\(maxRetries))")
+        print("🔄 Server not ready yet, retrying in \(retryDelay)s... (attempt \(retryCount + 1)/\(maxRetries))")
                     
                     DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + retryDelay) {
                         self.checkServerHealth(retryCount: retryCount + 1, maxRetries: maxRetries)
                     }
                 } else {
-                    print("❌ Server failed to start after \(maxRetries) attempts")
+        print("❌ Server failed to start after \(maxRetries) attempts")
                     self.isServerRunning = false
                     
                     // Check if process is still running for diagnostics
                     if let process = self.serverProcess {
                         if process.isRunning {
-                            print("📝 Process is running but not responding to API calls")
+        print("📝 Process is running but not responding to API calls")
                         } else {
                             let exitCode = process.terminationStatus
-                            print("📝 Process has terminated, exit code: \(exitCode)")
-                            print("💡 \(self.getOllamaErrorMessage(exitCode: exitCode))")
+        print("📝 Process has terminated, exit code: \(exitCode)")
+        print("💡 \(self.getOllamaErrorMessage(exitCode: exitCode))")
                         }
                     }
                 }
@@ -630,10 +630,10 @@ class OllamaManager: ObservableObject {
                     self.availableModels = modelNames
                     self.isFetchingModels = false
                     completion(modelNames)
-                    print("📦 Found \(modelNames.count) local models: \(modelNames)")
+        print("📦 Found \(modelNames.count) local models: \(modelNames)")
                 }
             } catch {
-                print("❌ Failed to fetch local models: \(error)")
+        print("❌ Failed to fetch local models: \(error)")
                 DispatchQueue.main.async {
                     self.isFetchingModels = false
                     completion([])
@@ -672,7 +672,7 @@ class OllamaManager: ObservableObject {
     // Stop the Ollama server
     func stopServer() {
         guard let process = serverProcess else {
-            print("🔴 No Ollama server process to stop")
+        print("🔴 No Ollama server process to stop")
             return
         }
         
@@ -684,11 +684,11 @@ class OllamaManager: ObservableObject {
         // Wait a moment for graceful shutdown
         DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 2.0) {
             if process.isRunning {
-                print("⚠️ Process still running, forcing termination...")
+        print("⚠️ Process still running, forcing termination...")
                 // Force kill if still running
                 kill(process.processIdentifier, SIGKILL)
             } else {
-                print("✅ Ollama server stopped gracefully")
+        print("✅ Ollama server stopped gracefully")
             }
         }
         
@@ -739,7 +739,7 @@ class OllamaManager: ObservableObject {
     // Pull a model from Ollama
     func pullModel(_ modelName: String) async {
         guard !isPulling else { 
-            print("🔴 Already pulling a model, ignoring request")
+        print("🔴 Already pulling a model, ignoring request")
             return 
         }
         
@@ -753,7 +753,7 @@ class OllamaManager: ObservableObject {
         }
         
         guard let url = URL(string: "\(baseURL)/api/pull") else { 
-            print("🔴 Failed to create URL for: \(baseURL)/api/pull")
+        print("🔴 Failed to create URL for: \(baseURL)/api/pull")
             return 
         }
         
@@ -772,9 +772,9 @@ class OllamaManager: ObservableObject {
         
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            print("🟢 Request body serialized successfully")
+        print("🟢 Request body serialized successfully")
         } catch {
-            print("🔴 Failed to serialize request body: \(error)")
+        print("🔴 Failed to serialize request body: \(error)")
             await MainActor.run {
                 self.isPulling = false
                 self.pullProgress = "Error: Failed to create request"
@@ -804,7 +804,7 @@ class OllamaStreamDelegate: NSObject, URLSessionDataDelegate {
     
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         guard let manager = manager else { 
-            print("🔴 URLSession delegate: manager is nil")
+        print("🔴 URLSession delegate: manager is nil")
             return 
         }
         
@@ -812,30 +812,30 @@ class OllamaStreamDelegate: NSObject, URLSessionDataDelegate {
         
         // Append data to buffer
         if let string = String(data: data, encoding: .utf8) {
-            print("📝 RAW STRING CHUNK: '\(string)'")
+        print("📝 RAW STRING CHUNK: '\(string)'")
             manager.streamBuffer += string
-            print("📦 CURRENT BUFFER: '\(manager.streamBuffer)'")
+        print("📦 CURRENT BUFFER: '\(manager.streamBuffer)'")
             
             // Process complete lines
             let lines = manager.streamBuffer.components(separatedBy: "\n")
-            print("📋 SPLIT INTO \(lines.count) LINES")
+        print("📋 SPLIT INTO \(lines.count) LINES")
             
             for i in 0..<lines.count - 1 {
                 let line = lines[i].trimmingCharacters(in: .whitespacesAndNewlines)
                 if !line.isEmpty {
-                    print("🔄 PROCESSING LINE \(i): '\(line)'")
+        print("🔄 PROCESSING LINE \(i): '\(line)'")
                     processJSONLine(line)
                 } else {
-                    print("⚪ EMPTY LINE \(i) SKIPPED")
+        print("⚪ EMPTY LINE \(i) SKIPPED")
                 }
             }
             
             // Keep the incomplete line in buffer
             let remainingBuffer = lines.last ?? ""
-            print("💾 REMAINING IN BUFFER: '\(remainingBuffer)'")
+        print("💾 REMAINING IN BUFFER: '\(remainingBuffer)'")
             manager.streamBuffer = remainingBuffer
         } else {
-            print("🔴 Failed to convert data to UTF-8 string")
+        print("🔴 Failed to convert data to UTF-8 string")
         }
     }
     
@@ -850,10 +850,10 @@ class OllamaStreamDelegate: NSObject, URLSessionDataDelegate {
                 let nsError = error as NSError
                 if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCannotConnectToHost {
                     manager.pullProgress = "Error: Cannot connect to Ollama server"
-                    print("🔴 Pull failed - server not running: \(error.localizedDescription)")
+        print("🔴 Pull failed - server not running: \(error.localizedDescription)")
                 } else {
                     manager.pullProgress = "Error: \(error.localizedDescription)"
-                    print("🔴 Pull failed: \(error.localizedDescription)")
+        print("🔴 Pull failed: \(error.localizedDescription)")
                 }
                 manager.isPulling = false
             } else {
@@ -882,12 +882,12 @@ class OllamaStreamDelegate: NSObject, URLSessionDataDelegate {
         
         guard let manager = manager,
               let data = line.data(using: .utf8) else { 
-            print("🔴 Failed to get manager or convert line to data")
+        print("🔴 Failed to get manager or convert line to data")
             return 
         }
         
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { 
-            print("🔴 Failed to parse JSON from line: '\(line)'")
+        print("🔴 Failed to parse JSON from line: '\(line)'")
             return 
         }
         
@@ -895,23 +895,23 @@ class OllamaStreamDelegate: NSObject, URLSessionDataDelegate {
         
         DispatchQueue.main.async {
             if let status = json["status"] as? String {
-                print("✅ Status found: '\(status)'")
+        print("✅ Status found: '\(status)'")
                 
                 // Log all available fields
                 if let digest = json["digest"] as? String {
-                    print("🔑 Digest: \(digest)")
+        print("🔑 Digest: \(digest)")
                 }
                 if let total = json["total"] as? Int {
-                    print("📏 Total: \(total)")
+        print("📏 Total: \(total)")
                 }
                 if let completed = json["completed"] as? Int {
-                    print("✨ Completed: \(completed)")
+        print("✨ Completed: \(completed)")
                 }
                 
                 // Handle different status types
                 switch status {
                 case "success":
-                    print("🎉 SUCCESS: Download complete")
+        print("🎉 SUCCESS: Download complete")
                     manager.isPulling = false
                     manager.pullProgress = ""
                     manager.pullPercentage = 0.0
@@ -929,73 +929,73 @@ class OllamaStreamDelegate: NSObject, URLSessionDataDelegate {
                     }
                     
                 case "pulling manifest":
-                    print("📄 PULLING MANIFEST")
+        print("📄 PULLING MANIFEST")
                     manager.pullProgress = "Pulling manifest"
                     manager.pullPercentage = 0.0
                     
                 case "verifying sha256 digest":
-                    print("🔐 VERIFYING DIGEST")
+        print("🔐 VERIFYING DIGEST")
                     manager.pullProgress = "Verifying download"
                     manager.pullPercentage = 95.0
                     
                 case "writing manifest":
-                    print("💾 WRITING MANIFEST")
+        print("💾 WRITING MANIFEST")
                     manager.pullProgress = "Writing manifest"
                     manager.pullPercentage = 98.0
                     
                 case "removing any unused layers":
-                    print("🧹 CLEANING UP")
+        print("🧹 CLEANING UP")
                     manager.pullProgress = "Cleaning up"
                     manager.pullPercentage = 99.0
                     
                 case let status where status.starts(with: "downloading") || status.starts(with: "pulling"):
-                    print("⬇️ DOWNLOAD/PULL STATUS: '\(status)'")
+        print("⬇️ DOWNLOAD/PULL STATUS: '\(status)'")
                     
                     // Extract progress from downloading/pulling status
                     if let total = json["total"] as? Int,
                        let completed = json["completed"] as? Int {
-                        print("📊 Progress data - Total: \(total), Completed: \(completed)")
+        print("📊 Progress data - Total: \(total), Completed: \(completed)")
                         
                         self.totalBytes = total
                         self.completedBytes = completed
                         let percentage = total > 0 ? (Double(completed) / Double(total)) * 100 : 0
                         let cappedPercentage = min(percentage, 90.0) // Cap at 90% for download phase
                         
-                        print("🔢 Calculated percentage: \(percentage)% -> Capped: \(cappedPercentage)%")
+        print("🔢 Calculated percentage: \(percentage)% -> Capped: \(cappedPercentage)%")
                         manager.pullPercentage = cappedPercentage
                         
                         // Extract digest for better progress message
                         if let digest = json["digest"] as? String {
                             let shortDigest = String(digest.prefix(12))
                             manager.pullProgress = "Pulling \(shortDigest)"
-                            print("🏷️ Updated progress message to: 'Pulling \(shortDigest)'")
+        print("🏷️ Updated progress message to: 'Pulling \(shortDigest)'")
                         } else {
                             manager.pullProgress = "Downloading model"
-                            print("🏷️ Updated progress message to: 'Downloading model'")
+        print("🏷️ Updated progress message to: 'Downloading model'")
                         }
                         
-                        print("📈 UI UPDATED - Progress: '\(manager.pullProgress)', Percentage: \(manager.pullPercentage)%")
+        print("📈 UI UPDATED - Progress: '\(manager.pullProgress)', Percentage: \(manager.pullPercentage)%")
                         
                     } else {
-                        print("⚠️ No progress data found in download/pull status")
-                        print("   - total field: \(json["total"] ?? "missing")")
-                        print("   - completed field: \(json["completed"] ?? "missing")")
+        print("⚠️ No progress data found in download/pull status")
+        print("   - total field: \(json["total"] ?? "missing")")
+        print("   - completed field: \(json["completed"] ?? "missing")")
                         
                         // Fallback for downloading/pulling status without progress data
                         manager.pullProgress = "Downloading model"
-                        print("🏷️ Fallback: Updated progress message to: 'Downloading model'")
+        print("🏷️ Fallback: Updated progress message to: 'Downloading model'")
                     }
                     
                 default:
-                    print("❓ OTHER STATUS: '\(status)'")
+        print("❓ OTHER STATUS: '\(status)'")
                     // For other statuses, just show the capitalized status
                     let capitalizedStatus = self.capitalizeFirstWord(status)
                     manager.pullProgress = capitalizedStatus
-                    print("🏷️ Updated progress message to: '\(capitalizedStatus)'")
+        print("🏷️ Updated progress message to: '\(capitalizedStatus)'")
                 }
             } else {
-                print("⚠️ No status field in JSON response")
-                print("📋 Available keys: \(Array(json.keys))")
+        print("⚠️ No status field in JSON response")
+        print("📋 Available keys: \(Array(json.keys))")
             }
         }
     }
@@ -1095,6 +1095,7 @@ struct ContentView: View {
     @State private var editingText: String = "" // Current text being edited (always the latest USER section)
     @State private var isStreamingReflection: Bool = false // Freeze text editor during streaming
     @State private var forceRefresh: Bool = false // Force UI refresh after streaming completion
+    @State private var reloadingReflectionIndex: Int? = nil // Track which reflection is reloading
     
     @State private var shouldScrollToBottom: Bool = false
     
@@ -1136,9 +1137,9 @@ struct ContentView: View {
         if !FileManager.default.fileExists(atPath: directory.path) {
             do {
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                print("Successfully created Journal directory")
+        print("Successfully created Journal directory")
             } catch {
-                print("Error creating directory: \(error)")
+        print("Error creating directory: \(error)")
             }
         }
         
@@ -1242,6 +1243,111 @@ struct ContentView: View {
         return context
     }
     
+    // Reload a specific reflection with context from all sections before it
+    private func reloadReflection(at index: Int) {
+        print("🔄 reloadReflection called: index=\(index), sections.count=\(sections.count)")
+        guard reloadingReflectionIndex == nil else { 
+        print("❌ reloadReflection blocked: already reloading index \(reloadingReflectionIndex)")
+            return 
+        }  
+        guard !isStreamingReflection && !reflectionViewModel.isLoading else { 
+        print("❌ reloadReflection blocked: streaming=\(isStreamingReflection), loading=\(reflectionViewModel.isLoading)")
+            return 
+        }  
+        guard index < sections.count && sections[index].type == .reflection else { 
+        print("❌ reloadReflection blocked: invalid index \(index) or not reflection. sections.count=\(sections.count)")
+            if index < sections.count {
+        print("   section type: \(sections[index].type)")
+            }
+            return 
+        }
+        
+        reloadingReflectionIndex = index
+        
+        // Build context from all sections before this reflection
+        let context = buildReflectionContext(upToIndex: index)
+        
+        // DELETE existing reflection content - this is crucial
+        print("🗑️ Deleting reflection content at index \(index)")
+        guard index < sections.count else {
+        print("❌ ERROR: Cannot delete reflection - index \(index) out of range for sections.count=\(sections.count)")
+            return
+        }
+        sections[index].text = ""
+        
+        // Force UI refresh to show empty reflection with OscillatingDotView
+        // Note: Scrolling will be handled in the ScrollViewReader within the UI
+        
+        // Determine entry type and call appropriate reflection method
+        if let currentId = selectedEntryId,
+           let entry = entries.first(where: { $0.id == currentId }) {
+            
+            let apiKey = settingsManager.settings.llmMode == "remote" ? (getOpenAIKeyFromKeychain() ?? "") : ""
+            
+            if entry.filename.hasPrefix("[Question]-") {
+                // Extract original question from first user section
+                let question = sections.first?.text ?? ""
+                reflectionViewModel.startQuestionResponse(
+                    apiKey: apiKey,
+                    allEntries: context,
+                    question: question,
+                    llmMode: settingsManager.settings.llmMode,
+                    selectedOllamaModel: settingsManager.settings.selectedOllamaModel,
+                    onComplete: { self.handleReloadComplete() },
+                    onStream: { streamedText in self.handleReloadStream(streamedText, at: index) }
+                )
+            } else if entry.filename.hasPrefix("[Reflection]-") {
+                // For date-range reflections, use followup method with empty previous reflection
+                reflectionViewModel.startReflectionFollowup(
+                    apiKey: apiKey,
+                    originalEntries: context,
+                    reflectionContent: "",  // Empty since we're regenerating from scratch
+                    llmMode: settingsManager.settings.llmMode,
+                    selectedOllamaModel: settingsManager.settings.selectedOllamaModel,
+                    onComplete: { self.handleReloadComplete() },
+                    onStream: { streamedText in self.handleReloadStream(streamedText, at: index) }
+                )
+            } else {
+                // Regular reflection
+                reflectionViewModel.start(
+                    apiKey: apiKey,
+                    entryText: context,
+                    llmMode: settingsManager.settings.llmMode,
+                    selectedOllamaModel: settingsManager.settings.selectedOllamaModel,
+                    onComplete: { self.handleReloadComplete() },
+                    onStream: { streamedText in self.handleReloadStream(streamedText, at: index) }
+                )
+            }
+        }
+    }
+    
+    private func handleReloadStream(_ streamedText: String, at index: Int) {
+        // Replace the deleted reflection content with new streaming content
+        // print("🔄 handleReloadStream: index=\(index), sections.count=\(sections.count)")
+        guard index < sections.count else {
+        print("❌ ERROR: handleReloadStream index \(index) out of range for sections.count=\(sections.count)")
+            return
+        }
+        sections[index].text = streamedText
+        
+        // Auto-scroll will be handled by existing reflection scroll logic
+        
+        // Save to file during streaming
+        if let currentId = selectedEntryId,
+           let entry = entries.first(where: { $0.id == currentId }) {
+            saveEntry(entry: entry)
+        }
+    }
+    
+    private func handleReloadComplete() {
+        reloadingReflectionIndex = nil
+        
+        if let currentId = selectedEntryId,
+           let entry = entries.first(where: { $0.id == currentId }) {
+            saveEntry(entry: entry)
+        }
+    }
+    
     // Modify getDocumentsDirectory to use cached value
     private func getDocumentsDirectory() -> URL {
         return documentsDirectory
@@ -1256,10 +1362,10 @@ struct ContentView: View {
         
         do {
             try text.write(to: fileURL, atomically: true, encoding: .utf8)
-            print("Successfully saved file")
+        print("Successfully saved file")
         } catch {
-            print("Error saving file: \(error)")
-            print("Error details: \(error.localizedDescription)")
+        print("Error saving file: \(error)")
+        print("Error details: \(error.localizedDescription)")
         }
     }
     
@@ -1273,13 +1379,13 @@ struct ContentView: View {
         do {
             if fileManager.fileExists(atPath: fileURL.path) {
                 text = try String(contentsOf: fileURL, encoding: .utf8)
-                print("Successfully loaded file")
+        print("Successfully loaded file")
             } else {
-                print("File does not exist yet")
+        print("File does not exist yet")
             }
         } catch {
-            print("Error loading file: \(error)")
-            print("Error details: \(error.localizedDescription)")
+        print("Error loading file: \(error)")
+        print("Error details: \(error.localizedDescription)")
         }
     }
     
@@ -1366,7 +1472,9 @@ struct ContentView: View {
         editingText = "" // Don't show the "Read x entries" text in the editor, only in the right panel
         
         // Add REFLECTION section and start streaming
+        print("➕ Appending new reflection section. Current sections.count: \(sections.count)")
         sections.append(EntrySection(type: .reflection, text: ""))
+        print("✅ New sections.count after reflection append: \(sections.count)")
         
         // Show reflection panel and freeze text editor
         showReflectionPanel = true
@@ -1376,7 +1484,9 @@ struct ContentView: View {
         // Start reflection with the gathered content
         reflectionViewModel.start(apiKey: apiKey, entryText: rangeContent, llmMode: settingsManager.settings.llmMode, selectedOllamaModel: settingsManager.settings.selectedOllamaModel) {
             // On complete: add new empty USER section, unfreeze editor, and save
+        print("➕ Appending new user section. Current sections.count: \(self.sections.count)")
             self.sections.append(EntrySection(type: .user, text: "\n\n"))
+        print("✅ New sections.count after user append: \(self.sections.count)")
             self.editingText = "\n\n"
             self.isStreamingReflection = false
             
@@ -1392,7 +1502,14 @@ struct ContentView: View {
         } onStream: { streamedText in
             // Update the latest REFLECTION section as it streams
             if let lastReflectionIndex = self.sections.lastIndex(where: { $0.type == .reflection }) {
+        print("📝 Updating reflection at lastIndex: \(lastReflectionIndex), sections.count: \(self.sections.count)")
+                guard lastReflectionIndex < self.sections.count else {
+        print("❌ ERROR: lastReflectionIndex \(lastReflectionIndex) out of range for sections.count=\(self.sections.count)")
+                    return
+                }
                 self.sections[lastReflectionIndex].text = streamedText
+            } else {
+        print("⚠️ No reflection section found for streaming update")
             }
             // Save to file during streaming
             if let currentId = self.selectedEntryId,
@@ -1522,7 +1639,9 @@ struct ContentView: View {
         editingText = "" // Don't show the question text in the editor, only in the right panel
         
         // Add REFLECTION section and start streaming
+        print("➕ Appending new reflection section. Current sections.count: \(sections.count)")
         sections.append(EntrySection(type: .reflection, text: ""))
+        print("✅ New sections.count after reflection append: \(sections.count)")
         
         // Show reflection panel and freeze text editor
         showReflectionPanel = true
@@ -1532,7 +1651,9 @@ struct ContentView: View {
         // Start question response with the gathered content
         reflectionViewModel.startQuestionResponse(apiKey: apiKey, allEntries: allContent, question: question, llmMode: settingsManager.settings.llmMode, selectedOllamaModel: settingsManager.settings.selectedOllamaModel) {
             // On complete: add new empty USER section, unfreeze editor, and save
+        print("➕ Appending new user section. Current sections.count: \(self.sections.count)")
             self.sections.append(EntrySection(type: .user, text: "\n\n"))
+        print("✅ New sections.count after user append: \(self.sections.count)")
             self.editingText = "\n\n"
             self.isStreamingReflection = false
             
@@ -1549,7 +1670,14 @@ struct ContentView: View {
         } onStream: { streamedText in
             // Update the latest REFLECTION section as it streams
             if let lastReflectionIndex = self.sections.lastIndex(where: { $0.type == .reflection }) {
+        print("📝 Updating reflection at lastIndex: \(lastReflectionIndex), sections.count: \(self.sections.count)")
+                guard lastReflectionIndex < self.sections.count else {
+        print("❌ ERROR: lastReflectionIndex \(lastReflectionIndex) out of range for sections.count=\(self.sections.count)")
+                    return
+                }
                 self.sections[lastReflectionIndex].text = streamedText
+            } else {
+        print("⚠️ No reflection section found for streaming update")
             }
             // Save to file during streaming
             if let currentId = self.selectedEntryId,
@@ -1645,6 +1773,26 @@ struct ContentView: View {
         }
     }
     
+    // Function to build context from sections up to a specific index (for reload)
+    private func buildReflectionContext(upToIndex targetIndex: Int) -> String {
+        var context = ""
+        
+        for (index, section) in sections.enumerated() {
+            if index >= targetIndex { break }  // Stop before target reflection
+            
+            if section.type == .user {
+                if !context.isEmpty { context += "\n\n" }
+                context += section.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            } else if section.type == .reflection {
+                if !context.isEmpty { context += "\n\n" }
+                context += "--- REFLECTION ---\n\n"
+                context += section.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        
+        return context
+    }
+    
     // Function to gather entries from the last 7 days
     private func gatherEntriesInDateRange(from startDate: Date, to endDate: Date) -> String {
         let documentsDirectory = getDocumentsDirectory()
@@ -1658,7 +1806,7 @@ struct ContentView: View {
             let fileURLs = try fileManager.contentsOfDirectory(at: documentsDirectory, includingPropertiesForKeys: nil)
             let mdFiles = fileURLs.filter { $0.pathExtension == "md" }
             
-            print("Found \(mdFiles.count) .md files to process")
+        print("Found \(mdFiles.count) .md files to process")
             
             let calendar = Calendar.current
             let startOfStartDate = calendar.startOfDay(for: startDate)
@@ -1796,10 +1944,10 @@ struct ContentView: View {
                         let cleanContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
                         
                         if !cleanContent.isEmpty {
-                            print("✓ Including file: \(filename)")
-                            print("  Display date: \(displayDate)")
-                            print("  Content length: \(cleanContent.count) characters")
-                            print("  Content preview: \(String(cleanContent.prefix(100)))...")
+        print("✓ Including file: \(filename)")
+        print("  Display date: \(displayDate)")
+        print("  Content length: \(cleanContent.count) characters")
+        print("  Content preview: \(String(cleanContent.prefix(100)))...")
                             
                             weeklyContent += "\n\nNEW ENTRY \(displayDate)\n\n"
                             
@@ -1811,23 +1959,23 @@ struct ContentView: View {
                             weeklyContent += processedContent
                             processedFiles.append(filename)
                         } else {
-                            print("⚠ Skipping empty file: \(filename)")
+        print("⚠ Skipping empty file: \(filename)")
                         }
                     } catch {
-                        print("❌ Error reading file \(filename): \(error)")
+        print("❌ Error reading file \(filename): \(error)")
                     }
                 } else {
-                    print("⏭ Skipping file (outside date range): \(filename)")
+        print("⏭ Skipping file (outside date range): \(filename)")
                 }
             }
         } catch {
-            print("❌ Error gathering weekly entries: \(error)")
+        print("❌ Error gathering weekly entries: \(error)")
         }
         
         print("\n=== WEEKLY REFLECTION SUMMARY ===")
         print("Processed \(processedFiles.count) files:")
         for file in processedFiles {
-            print("  - \(file)")
+        print("  - \(file)")
         }
         print("Total content length: \(weeklyContent.count) characters")
         
@@ -1846,7 +1994,7 @@ struct ContentView: View {
             let fileURLs = try fileManager.contentsOfDirectory(at: documentsDirectory, includingPropertiesForKeys: nil)
             let mdFiles = fileURLs.filter { $0.pathExtension == "md" }
             
-            print("Found \(mdFiles.count) .md files total")
+        print("Found \(mdFiles.count) .md files total")
             
             let calendar = Calendar.current
             let startOfStartDate = calendar.startOfDay(for: startDate)
@@ -1857,7 +2005,7 @@ struct ContentView: View {
                 
                 // Handle Daily entries: [Daily]-[MM-dd-yyyy]-[HH-mm-ss].md
                 if filename.hasPrefix("[Daily]-") {
-                    print("Checking Daily file: \(filename)")
+        print("Checking Daily file: \(filename)")
                     if let dateMatch = filename.range(of: "\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\]", options: .regularExpression) {
                         let matchString = String(filename[dateMatch])
                         let components = matchString.components(separatedBy: "]-[")
@@ -1872,25 +2020,25 @@ struct ContentView: View {
                             
                             if let fileDate = dateFormatter.date(from: dateTimeString) {
                                 let startOfFileDate = calendar.startOfDay(for: fileDate)
-                                print("File date: \(fileDate), in range: \(startOfFileDate >= startOfStartDate && startOfFileDate <= startOfEndDate)")
+        print("File date: \(fileDate), in range: \(startOfFileDate >= startOfStartDate && startOfFileDate <= startOfEndDate)")
                                 
                                 if startOfFileDate >= startOfStartDate && startOfFileDate <= startOfEndDate {
                                     entryCount += 1
-                                    print("Added to count, total now: \(entryCount)")
+        print("Added to count, total now: \(entryCount)")
                                 }
                             } else {
-                                print("Failed to parse date from: \(dateTimeString)")
+        print("Failed to parse date from: \(dateTimeString)")
                             }
                         } else {
-                            print("Invalid components: \(components)")
+        print("Invalid components: \(components)")
                         }
                     } else {
-                        print("No date match found")
+        print("No date match found")
                     }
                 }
                 // Handle Weekly entries: [Weekly]-[MM-dd-yyyy]-[MM-dd-yyyy]-[HH-mm-ss].md
                 else if filename.hasPrefix("[Weekly]-") {
-                    print("Checking Weekly file: \(filename)")
+        print("Checking Weekly file: \(filename)")
                     let pattern = "\\[Weekly\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\]"
                     if let match = filename.range(of: pattern, options: .regularExpression) {
                         let matchString = String(filename[match])
@@ -1912,7 +2060,7 @@ struct ContentView: View {
                                 // Check if weekly entry's date range overlaps with our target range
                                 if startOfWeeklyStart <= startOfEndDate && startOfWeeklyEnd >= startOfStartDate {
                                     entryCount += 1
-                                    print("Added Weekly entry to count, total now: \(entryCount)")
+        print("Added Weekly entry to count, total now: \(entryCount)")
                                 }
                             }
                         }
@@ -1920,7 +2068,7 @@ struct ContentView: View {
                 }
                 // Handle Reflection entries: [Reflection]-[timeframeType]-[MM-dd-yyyy]-[MM-dd-yyyy]-[HH-mm-ss].md
                 else if filename.hasPrefix("[Reflection]-") {
-                    print("Checking Reflection file: \(filename)")
+        print("Checking Reflection file: \(filename)")
                     let pattern = "\\[Reflection\\]-\\[([^\\]]+)\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\]"
                     if let match = filename.range(of: pattern, options: .regularExpression) {
                         let matchString = String(filename[match])
@@ -1943,7 +2091,7 @@ struct ContentView: View {
                                 // Check if reflection entry's date range overlaps with our target range
                                 if startOfReflectionStart <= startOfEndDate && startOfReflectionEnd >= startOfStartDate {
                                     entryCount += 1
-                                    print("Added Reflection entry to count, total now: \(entryCount)")
+        print("Added Reflection entry to count, total now: \(entryCount)")
                                 }
                             }
                         }
@@ -1951,7 +2099,7 @@ struct ContentView: View {
                 }
             }
         } catch {
-            print("Error counting entries: \(error)")
+        print("Error counting entries: \(error)")
         }
         
         print("Final entry count: \(entryCount)")
@@ -1965,7 +2113,7 @@ struct ContentView: View {
         let pattern = "\\[Reflection\\]-\\[([^\\]]+)\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\]"
         
         guard let match = filename.range(of: pattern, options: .regularExpression) else {
-            print("Failed to match reflection filename pattern: \(filename)")
+        print("Failed to match reflection filename pattern: \(filename)")
             return nil
         }
         
@@ -1973,7 +2121,7 @@ struct ContentView: View {
         let components = matchString.components(separatedBy: "]-[")
         
         guard components.count >= 5 else {
-            print("Insufficient components in reflection filename: \(filename)")
+        print("Insufficient components in reflection filename: \(filename)")
             return nil
         }
         
@@ -1986,7 +2134,7 @@ struct ContentView: View {
         
         guard let startDate = dateFormatter.date(from: startDateString),
               let endDate = dateFormatter.date(from: endDateString) else {
-            print("Failed to parse dates from reflection filename: \(filename)")
+        print("Failed to parse dates from reflection filename: \(filename)")
             return nil
         }
         
@@ -2102,12 +2250,12 @@ struct ContentView: View {
             let fileURLs = try fileManager.contentsOfDirectory(at: documentsDirectory, includingPropertiesForKeys: nil)
             let mdFiles = fileURLs.filter { $0.pathExtension == "md" }
             
-            print("Found \(mdFiles.count) .md files")
+        print("Found \(mdFiles.count) .md files")
             
             // Process each file
             let entriesWithDates = mdFiles.compactMap { fileURL -> (entry: HumanEntry, date: Date, content: String)? in
                 let filename = fileURL.lastPathComponent
-                print("Processing: \(filename)")
+        print("Processing: \(filename)")
                 
                 var fileDate: Date?
                 var displayDate: String = ""
@@ -2223,7 +2371,7 @@ struct ContentView: View {
                 }
                 
                 guard let validFileDate = fileDate else {
-                    print("Failed to parse date from filename: \(filename)")
+        print("Failed to parse date from filename: \(filename)")
                     return nil
                 }
                 
@@ -2281,7 +2429,7 @@ struct ContentView: View {
                         content: content  // Store the full content to check for welcome message
                     )
                 } catch {
-                    print("Error reading file: \(error)")
+        print("Error reading file: \(error)")
                     return nil
                 }
             }
@@ -2291,7 +2439,7 @@ struct ContentView: View {
                 .sorted { $0.date > $1.date }  // Sort by actual date from filename
                 .map { $0.entry }
             
-            print("Successfully loaded and sorted \(entries.count) entries")
+        print("Successfully loaded and sorted \(entries.count) entries")
             
             // Ensure previewText is always cleaned of section headers
             for entry in entries {
@@ -2327,11 +2475,11 @@ struct ContentView: View {
             
             if entries.isEmpty {
                 // First time user - create entry with welcome message
-                print("First time user, creating welcome entry")
+        print("First time user, creating welcome entry")
                 createNewEntry()
             } else if !hasEmptyEntryToday && !hasOnlyWelcomeEntry {
                 // No empty entry for today and not just the welcome entry - create new entry
-                print("No empty entry for today, creating new entry")
+        print("No empty entry for today, creating new entry")
                 createNewEntry()
             } else {
                 // Select the most recent empty entry from today or the welcome entry
@@ -2362,8 +2510,8 @@ struct ContentView: View {
             }
             
         } catch {
-            print("Error loading directory contents: \(error)")
-            print("Creating default entry after error")
+        print("Error loading directory contents: \(error)")
+        print("Creating default entry after error")
             createNewEntry()
         }
     }
@@ -2648,11 +2796,20 @@ struct ContentView: View {
                                 
                                 // Update the latest USER section with current editing text
                                 if let lastIndex = sections.lastIndex(where: { $0.type == .user }) {
+        print("✏️ Updating user section at lastIndex: \(lastIndex), sections.count: \(sections.count)")
+                                    guard lastIndex < sections.count else {
+        print("❌ ERROR: user lastIndex \(lastIndex) out of range for sections.count=\(sections.count)")
+                                        return
+                                    }
                                     sections[lastIndex].text = editingText
                                 }
                                 
                                 // Add new REFLECTION section (will be filled during streaming)
-                                sections.append(EntrySection(type: .reflection, text: ""))
+        print("➕ Appending new reflection section. Current sections.count: \(sections.count)")
+        print("➕ Appending new reflection section. Current sections.count: \(sections.count)")
+        sections.append(EntrySection(type: .reflection, text: ""))
+        print("✅ New sections.count after reflection append: \(sections.count)")
+        print("✅ New sections.count after append: \(sections.count)")
                                 
                                 // Show reflection panel and freeze text editor
                                 showReflectionPanel = true
@@ -2665,7 +2822,7 @@ struct ContentView: View {
                                    let dateRange = extractDateRangeFromReflectionFilename(entry.filename) {
                                     
                                     // This is a reflection file - gather original entries and combine with current content
-                                    print("Detected reflection file followup: \(entry.filename)")
+        print("Detected reflection file followup: \(entry.filename)")
                                     let originalEntries = gatherEntriesInDateRange(from: dateRange.startDate, to: dateRange.endDate)
                                     let currentReflectionContent = buildFullConversationContext()
                                     
@@ -2678,7 +2835,9 @@ struct ContentView: View {
                                         selectedOllamaModel: settingsManager.settings.selectedOllamaModel,
                                         onComplete: {
                                             // On complete: add new empty USER section, unfreeze editor, and save
-                                            sections.append(EntrySection(type: .user, text: "\n\n"))
+        print("➕ Appending new user section. Current sections.count: \(sections.count)")
+                                        sections.append(EntrySection(type: .user, text: "\n\n"))
+        print("✅ New sections.count after user append: \(sections.count)")
                                             editingText = "\n\n"
                                             isStreamingReflection = false
                                             
@@ -2712,7 +2871,9 @@ struct ContentView: View {
                                     // Start reflection with streaming to file
                                     reflectionViewModel.start(apiKey: apiKey, entryText: fullContext, llmMode: settingsManager.settings.llmMode, selectedOllamaModel: settingsManager.settings.selectedOllamaModel) {
                                         // On complete: add new empty USER section, unfreeze editor, and save
+        print("➕ Appending new user section. Current sections.count: \(sections.count)")
                                         sections.append(EntrySection(type: .user, text: "\n\n"))
+        print("✅ New sections.count after user append: \(sections.count)")
                                         editingText = "\n\n"
                                         isStreamingReflection = false
                                         
@@ -3466,6 +3627,7 @@ struct ContentView: View {
                                     let sectionsToShow = sections.dropLast(sections.last?.type == .user ? 1 : 0)
                                     
                                     ForEach(Array(sectionsToShow.enumerated()), id: \.element.id) { index, section in
+                                        // let _ = print("🔍 ForEach section: index=\(index), section.id=\(section.id), section.type=\(section.type), sectionsToShow.count=\(sectionsToShow.count), sections.count=\(sections.count)")
                                         VStack(alignment: .leading, spacing: 0) {
                                             if section.type == .user {
                                                 // Show user text (no background, gray color) with padding to match reflection text
@@ -3479,33 +3641,57 @@ struct ContentView: View {
                                                     .padding(.bottom, 16)
                                                     .textSelection(.enabled)
                                             } else {
-                                                // Show reflection content with proper styling
-                                                VStack(alignment: .leading, spacing: 0) {
-                                                    if section.text.isEmpty && reflectionViewModel.isLoading {
-                                                        // Show loading for empty reflection being streamed
-                                                        HStack(alignment: .top, spacing: 0) {
-                                                            OscillatingDotView(colorScheme: colorScheme)
-                                                            Spacer()
+                                                // Show reflection content with proper styling and reload button
+                                                VStack(alignment: .leading, spacing: 8) {
+                                                    // Reflection content box
+                                                    VStack(alignment: .leading, spacing: 0) {
+                                                        if section.text.isEmpty && (reflectionViewModel.isLoading || reloadingReflectionIndex == index) {
+                                                            // Show loading for empty reflection being streamed OR being reloaded
+                                                            HStack(alignment: .top, spacing: 0) {
+                                                                OscillatingDotView(colorScheme: colorScheme)
+                                                                Spacer()
+                                                            }
+                                                        } else if !section.text.isEmpty {
+                                                            // Show reflection content with user's line height (not AI line height)
+                                                            MarkdownTextView(
+                                                                content: section.text,
+                                                                font: userSelectedFont,
+                                                                fontSize: userFontSize,
+                                                                colorScheme: colorScheme,
+                                                                lineHeight: userLineHeight  // Use user line height for proper spacing
+                                                            )
+                                                            .id(userFontSize)
+                                                            .id(userSelectedFont)
+                                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                                            .frame(minHeight: userFontSize * 1.5 + 32)
                                                         }
-                                                    } else if !section.text.isEmpty {
-                                                        // Show reflection content with user's line height (not AI line height)
-                                                        MarkdownTextView(
-                                                            content: section.text,
-                                                            font: userSelectedFont,
-                                                            fontSize: userFontSize,
-                                                            colorScheme: colorScheme,
-                                                            lineHeight: userLineHeight  // Use user line height for proper spacing
-                                                        )
-                                                        .id(userFontSize)
-                                                        .id(userSelectedFont)
-                                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                                        .frame(minHeight: userFontSize * 1.5 + 32)
+                                                    }
+                                                    .padding()
+                                                    .frame(minHeight: userFontSize * 1.5 + 32)
+                                                    .background(Color.gray.opacity(0.1))
+                                                    .cornerRadius(12)
+                                                    .id("reflection-\(section.id)")  // Add scroll anchor
+                                                    
+                                                    // Reload button - bottom right positioned
+                                                    HStack {
+                                                        Spacer()
+                                                        Button(action: { 
+                                                            // Find the actual index in sections array
+                                                            if let actualIndex = sections.firstIndex(where: { $0.id == section.id }) {
+        print("🎯 Button pressed: sectionsToShow index=\(index), actual sections index=\(actualIndex)")
+                                                                reloadReflection(at: actualIndex)
+                                                            } else {
+        print("❌ Could not find section \(section.id) in sections array")
+                                                            }
+                                                        }) {
+                                                            Image(systemName: "arrow.clockwise")
+                                                                .font(.system(size: 14))
+                                                                .foregroundColor(.secondary)
+                                                        }
+                                                        .buttonStyle(PlainButtonStyle())
+                                                        .disabled(reloadingReflectionIndex != nil || isStreamingReflection || reflectionViewModel.isLoading)
                                                     }
                                                 }
-                                                .padding()
-                                                .frame(minHeight: userFontSize * 1.5 + 32)
-                                                .background(Color.gray.opacity(0.1))
-                                                .cornerRadius(12)
                                             }
                                         }
                                     }
@@ -3519,14 +3705,20 @@ struct ContentView: View {
                             }
                             .scrollIndicators(.never)
                             .onChange(of: sections) { _ in
-                                // Only scroll when we're actively streaming a reflection
-                                if isStreamingReflection || reflectionViewModel.isLoading {
+                                // Only scroll when we're actively streaming a reflection or reloading the most recent reflection
+                                let isReloadingMostRecent = reloadingReflectionIndex != nil && 
+                                                          reloadingReflectionIndex == sections.lastIndex(where: { $0.type == .reflection })
+                                
+                                if isStreamingReflection || reflectionViewModel.isLoading || isReloadingMostRecent {
                                     withAnimation {
                                         // If navbar is visible, scroll to top of anchor (content above navbar)
                                         // If navbar is hidden, scroll to bottom of anchor (bottom of page)
                                         let anchor: UnitPoint = bottomNavOpacity > 0 ? .top : .bottom
                                         proxy.scrollTo("reflectionBottomAnchor", anchor: anchor)
                                     }
+        // print("📜 Auto-scrolling: streaming=\(isStreamingReflection), loading=\(reflectionViewModel.isLoading), reloadingMostRecent=\(isReloadingMostRecent)")
+                                } else if reloadingReflectionIndex != nil {
+        print("📜 NOT scrolling: reloading older reflection at index \(reloadingReflectionIndex!)")
                                 }
                             }
                         }
@@ -3992,7 +4184,7 @@ struct ContentView: View {
                 entries[index].previewText = truncated
             }
         } catch {
-            print("Error updating preview text: \(error)")
+        print("Error updating preview text: \(error)")
         }
     }
     
@@ -4038,13 +4230,17 @@ struct ContentView: View {
         
         do {
             try contentToSave.trimmingCharacters(in: .whitespacesAndNewlines).write(to: fileURL, atomically: true, encoding: .utf8)
-            print("Successfully saved entry: \(entry.filename)")
+        print("Successfully saved entry: \(entry.filename)")
         } catch {
-            print("Error saving entry: \(error)")
+        print("Error saving entry: \(error)")
         }
     }
     
     private func loadEntry(entry: HumanEntry) {
+        print("📂 loadEntry called for: \(entry.filename)")
+        print("   Entry ID: \(entry.id.uuidString)")
+        print("   Current sections.count before reset: \(sections.count)")
+        
         let documentsDirectory = getDocumentsDirectory()
         let fileURL = documentsDirectory.appendingPathComponent(entry.filename)
 
@@ -4053,7 +4249,10 @@ struct ContentView: View {
         showReflectionPanel = false
         reflectionViewModel.reflectionResponse = ""
         isStreamingReflection = false
+        
+        print("   Clearing sections array")
         sections.removeAll()
+        print("   Sections cleared, new count: \(sections.count)")
         
         do {
             if fileManager.fileExists(atPath: fileURL.path) {
@@ -4095,7 +4294,13 @@ struct ContentView: View {
                     
                     // Add the final section (including empty ones)
                     if let sectionType = currentSectionType {
+        print("   Adding final section: \(sectionType)")
                         sections.append(EntrySection(type: sectionType, text: currentSectionText.trimmingCharacters(in: .whitespacesAndNewlines)))
+                    }
+                    
+        print("   ✅ Finished loading entry, sections.count: \(sections.count)")
+                    for (idx, section) in sections.enumerated() {
+        print("   Section \(idx): \(section.type) - ID: \(section.id.uuidString)")
                     }
                     
                     // Find the latest USER section for editing (must be the last section)
@@ -4118,14 +4323,14 @@ struct ContentView: View {
                     sections = [EntrySection(type: .user, text: editingText)]
                 }
                 
-                print("Successfully loaded entry: \(entry.filename)")
+        print("Successfully loaded entry: \(entry.filename)")
             } else {
                 // New entry
                 editingText = "\n\n"
                 sections = [EntrySection(type: .user, text: "\n\n")]
             }
         } catch {
-            print("Error loading entry: \(error)")
+        print("Error loading entry: \(error)")
             // Fallback: start with empty entry
             editingText = "\n\n"
             sections = [EntrySection(type: .user, text: "\n\n")]
@@ -4183,10 +4388,19 @@ struct ContentView: View {
     }
     
     private func navigateToNextEntry() {
+        print("⬇️ navigateToNextEntry called")
+        print("   entries.count: \(entries.count)")
+        print("   manuallySelectedEntryId: \(manuallySelectedEntryId?.uuidString ?? "nil")")
+        print("   selectedEntryId: \(selectedEntryId?.uuidString ?? "nil")")
+        
         guard let currentId = manuallySelectedEntryId,
               let currentIndex = entries.firstIndex(where: { $0.id == currentId }) else {
+        print("   ❌ No current entry found or invalid index")
             return
         }
+        
+        print("   Current entry index: \(currentIndex)")
+        print("   Current entry filename: \(entries[currentIndex].filename)")
         
         let nextIndex = currentIndex + 1
         
@@ -4211,10 +4425,19 @@ struct ContentView: View {
     }
     
     private func navigateToPreviousEntry() {
+        print("⬆️ navigateToPreviousEntry called")
+        print("   entries.count: \(entries.count)")
+        print("   manuallySelectedEntryId: \(manuallySelectedEntryId?.uuidString ?? "nil")")
+        print("   selectedEntryId: \(selectedEntryId?.uuidString ?? "nil")")
+        
         guard let currentId = manuallySelectedEntryId,
               let currentIndex = entries.firstIndex(where: { $0.id == currentId }) else {
+        print("   ❌ No current entry found or invalid index")
             return
         }
+        
+        print("   Current entry index: \(currentIndex)")
+        print("   Current entry filename: \(entries[currentIndex].filename)")
         
         let previousIndex = currentIndex - 1
         
@@ -4245,7 +4468,7 @@ struct ContentView: View {
         
         do {
             try fileManager.removeItem(at: fileURL)
-            print("Successfully deleted file: \(entry.filename)")
+        print("Successfully deleted file: \(entry.filename)")
             
             // Remove the entry from the entries array
             if let index = entries.firstIndex(where: { $0.id == entry.id }) {
@@ -4262,7 +4485,7 @@ struct ContentView: View {
                 }
             }
         } catch {
-            print("Error deleting file: \(error)")
+        print("Error deleting file: \(error)")
         }
     }
     
@@ -4329,11 +4552,11 @@ struct ContentView: View {
                 // Create PDF data
                 if let pdfData = createPDFFromText(text: entryContent) {
                     try pdfData.write(to: url)
-                    print("Successfully exported PDF to: \(url.path)")
+        print("Successfully exported PDF to: \(url.path)")
                 }
             }
         } catch {
-            print("Error in PDF export: \(error)")
+        print("Error in PDF export: \(error)")
         }
     }
     
@@ -4376,7 +4599,7 @@ struct ContentView: View {
         
         // Create a PDF context with the data consumer
         guard let pdfContext = CGContext(consumer: CGDataConsumer(data: pdfData as CFMutableData)!, mediaBox: nil, nil) else {
-            print("Failed to create PDF context")
+        print("Failed to create PDF context")
             return nil
         }
         
@@ -4420,7 +4643,7 @@ struct ContentView: View {
             
             // Safety check - don't allow infinite loops
             if pageIndex > 1000 {
-                print("Safety limit reached - stopping PDF generation")
+        print("Safety limit reached - stopping PDF generation")
                 break
             }
         }
@@ -4704,21 +4927,21 @@ struct ContentView: View {
         }
         
         private func processOllamaContent(_ content: String) {
-            print("🔍 processOllamaContent called with: '\(content.replacingOccurrences(of: "\n", with: "\\n"))'")
-            print("📊 Current state - isInThinkingBlock: \(isInThinkingBlock), waitingForFirstContent: \(waitingForFirstContent), currentTag: \(currentThinkingTag ?? "nil")")
-            print("📝 Current bufferedContent length: \(bufferedContent.count)")
+        // print("🔍 processOllamaContent called with: '\(content.replacingOccurrences(of: "\n", with: "\\n"))'")
+        // print("📊 Current state - isInThinkingBlock: \(isInThinkingBlock), waitingForFirstContent: \(waitingForFirstContent), currentTag: \(currentThinkingTag ?? "nil")")
+        // print("📝 Current bufferedContent length: \(bufferedContent.count)")
             
             // If we're waiting for first content after closing tag, continue buffering
             if waitingForFirstContent {
-                print("⏳ In waitingForFirstContent mode, adding to buffer")
+        print("⏳ In waitingForFirstContent mode, adding to buffer")
                 bufferedContent += content
                 
                 // Look for first non-whitespace character
                 let trimmed = bufferedContent.trimmingCharacters(in: .whitespacesAndNewlines)
-                print("✂️ Trimmed content: '\(trimmed)'")
+        print("✂️ Trimmed content: '\(trimmed)'")
                 if !trimmed.isEmpty {
                     // Found first actual content, start streaming from here
-                    print("✅ Found first real content, starting to stream: '\(trimmed)'")
+        print("✅ Found first real content, starting to stream: '\(trimmed)'")
                     waitingForFirstContent = false
                     let contentToStream = trimmed
                     bufferedContent = ""
@@ -4728,21 +4951,21 @@ struct ContentView: View {
                         self.onStream?(self.reflectionResponse)
                     }
                 } else {
-                    print("⏸️ Still only whitespace, continuing to wait")
+        print("⏸️ Still only whitespace, continuing to wait")
                 }
                 return
             }
             
             // Add content to buffer
             bufferedContent += content
-            print("📝 Updated bufferedContent: '\(bufferedContent.replacingOccurrences(of: "\n", with: "\\n"))'")
+        // print("📝 Updated bufferedContent: '\(bufferedContent.replacingOccurrences(of: "\n", with: "\\n"))'")
             
             // If we're not in a thinking block yet, check if we're starting one
             if !isInThinkingBlock {
-                print("🔄 Not in thinking block, checking for opening tags")
+        // print("🔄 Not in thinking block, checking for opening tags")
                 // Check if content starts with '<' and we might be entering a thinking block
                 if bufferedContent.hasPrefix("<") {
-                    print("🏷️ Buffer starts with '<', looking for opening tag")
+        print("🏷️ Buffer starts with '<', looking for opening tag")
                     // Look for complete opening tags like <think>, <reasoning>, etc.
                     let openTagPattern = #"<([a-zA-Z][a-zA-Z0-9_\-]*)>"#
                     if let regex = try? NSRegularExpression(pattern: openTagPattern),
@@ -4750,32 +4973,32 @@ struct ContentView: View {
                         if let tagRange = Range(match.range(at: 1), in: bufferedContent) {
                             currentThinkingTag = String(bufferedContent[tagRange])
                             isInThinkingBlock = true
-                            print("🎯 Found opening tag: '\(currentThinkingTag!)', entering thinking block")
+        print("🎯 Found opening tag: '\(currentThinkingTag!)', entering thinking block")
                             return // Don't stream content yet
                         }
                     }
                     // If we start with '<' but haven't found a complete tag yet, don't stream
-                    print("⏸️ Starts with '<' but no complete tag found yet, not streaming")
+        print("⏸️ Starts with '<' but no complete tag found yet, not streaming")
                     return
                 }
                 
-                print("📤 No thinking tag detected, streaming normally: '\(content)'")
+        // print("📤 No thinking tag detected, streaming normally: '\(content)'")
                 // No thinking tag detected, stream normally
                 DispatchQueue.main.async {
                     self.reflectionResponse += content
                     self.onStream?(self.reflectionResponse)
                 }
             } else {
-                print("🧠 In thinking block, looking for closing tag")
+        print("🧠 In thinking block, looking for closing tag")
                 // We're in a thinking block, look for the closing tag
                 if let tag = currentThinkingTag {
                     let closeTag = "</\(tag)>"
-                    print("🔍 Looking for closing tag: '\(closeTag)'")
+        print("🔍 Looking for closing tag: '\(closeTag)'")
                     if let closeRange = bufferedContent.range(of: closeTag) {
-                        print("🎉 Found closing tag!")
+        print("🎉 Found closing tag!")
                         // Found closing tag, extract content after it
                         let afterThinkingContent = String(bufferedContent[closeRange.upperBound...])
-                        print("📄 Content after thinking tag: '\(afterThinkingContent.replacingOccurrences(of: "\n", with: "\\n"))'")
+        print("📄 Content after thinking tag: '\(afterThinkingContent.replacingOccurrences(of: "\n", with: "\\n"))'")
                         
                         // Reset thinking block state
                         isInThinkingBlock = false
@@ -4783,10 +5006,10 @@ struct ContentView: View {
                         
                         // Check if there's actual content after the tag
                         let trimmedContent = afterThinkingContent.trimmingCharacters(in: .whitespacesAndNewlines)
-                        print("✂️ Trimmed after-tag content: '\(trimmedContent)'")
+        print("✂️ Trimmed after-tag content: '\(trimmedContent)'")
                         
                         if !trimmedContent.isEmpty {
-                            print("✅ Found actual content after tag, streaming immediately: '\(trimmedContent)'")
+        print("✅ Found actual content after tag, streaming immediately: '\(trimmedContent)'")
                             // There's actual content, stream it immediately
                             bufferedContent = ""
                             DispatchQueue.main.async {
@@ -4794,25 +5017,25 @@ struct ContentView: View {
                                 self.onStream?(self.reflectionResponse)
                             }
                         } else {
-                            print("⏳ Only whitespace after tag, entering waitingForFirstContent mode")
+        print("⏳ Only whitespace after tag, entering waitingForFirstContent mode")
                             // Only whitespace after tag, wait for first real content
                             waitingForFirstContent = true
                             bufferedContent = afterThinkingContent
                         }
                     } else {
-                        print("🔄 Closing tag not found yet, continuing to buffer")
+        print("🔄 Closing tag not found yet, continuing to buffer")
                     }
                     // If we haven't found the closing tag yet, keep buffering
                 }
             }
-            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         }
         
         func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
             let stringData = String(data: data, encoding: .utf8) ?? ""
-            print("🔗 URL Session received data: '\(stringData.replacingOccurrences(of: "\n", with: "\\n"))'")
+        // print("🔗 URL Session received data: '\(stringData.replacingOccurrences(of: "\n", with: "\\n"))'")
             let lines = stringData.split(separator: "\n")
-            print("📝 Split into \(lines.count) lines")
+        // print("📝 Split into \(lines.count) lines")
             
             for line in lines {
                 // Handle OpenAI format (SSE with "data: " prefix)
@@ -4846,31 +5069,31 @@ struct ContentView: View {
                 } else {
                     // Handle Ollama format (JSON lines)
                     let trimmedLine = String(line).trimmingCharacters(in: .whitespacesAndNewlines)
-                    print("🌐 Ollama line received: '\(trimmedLine)'")
+        // print("🌐 Ollama line received: '\(trimmedLine)'")
                     if !trimmedLine.isEmpty,
                        let jsonData = trimmedLine.data(using: .utf8) {
                         do {
                             if let json = try JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
-                                print("📦 Parsed Ollama JSON: \(json)")
+        // print("📦 Parsed Ollama JSON: \(json)")
                                 // Updated for /api/chat endpoint: extract message.content
                                 if let message = json["message"] as? [String: Any],
                                    let content = message["content"] as? String {
-                                    print("📨 Ollama response chunk: '\(content.replacingOccurrences(of: "\n", with: "\\n"))'")
+        // print("📨 Ollama response chunk: '\(content.replacingOccurrences(of: "\n", with: "\\n"))'")
                                     self.processOllamaContent(content)
                                 }
                                 // Remove old /api/generate 'response' field handling
                                 // if let response = json["response"] as? String {
-                                //     print("📨 Ollama response chunk: '\(response.replacingOccurrences(of: "\n", with: "\\n"))'")
+        // print("📨 Ollama response chunk: '\(response.replacingOccurrences(of: "\n", with: "\\n"))'")
                                 //     self.processOllamaContent(response)
                                 // }
                                 if let done = json["done"] as? Bool, done {
-                                    print("🏁 Ollama stream completed, processing remaining buffer")
+        print("🏁 Ollama stream completed, processing remaining buffer")
                                     // Handle any remaining buffered content when stream completes
-                                    print("🧹 Checking for remaining buffer content. Buffer empty: \(self.bufferedContent.isEmpty), inThinking: \(self.isInThinkingBlock), waitingForContent: \(self.waitingForFirstContent)")
+        print("🧹 Checking for remaining buffer content. Buffer empty: \(self.bufferedContent.isEmpty), inThinking: \(self.isInThinkingBlock), waitingForContent: \(self.waitingForFirstContent)")
                                     if !self.bufferedContent.isEmpty && (self.isInThinkingBlock || self.waitingForFirstContent) {
                                         // If we're still in a thinking block or waiting for content, stream the remaining content anyway
                                         let contentToStream = self.bufferedContent.trimmingCharacters(in: .whitespacesAndNewlines)
-                                        print("🔚 Streaming remaining buffer content: '\(contentToStream)'")
+        print("🔚 Streaming remaining buffer content: '\(contentToStream)'")
                                         if !contentToStream.isEmpty {
                                             DispatchQueue.main.async {
                                                 self.reflectionResponse += contentToStream
@@ -4947,7 +5170,7 @@ struct ContentView: View {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             
             let systemPrompt = """
-            below are my journal entries as well as my reflections on them. i will be asking a question and below is all the information you know about me. use this to answer the question.in your answer talk through it with me like a friend. don't therapize me and give me a whole breakdown, don't repeat my thoughts with headings. really take all of this, and answer the question as if you're an old homie.
+            below are my journal entries as well as my reflections on them. i will be asking a question and below is all the information you know about me. use this to answer the question. in your answer talk through it with me like a friend. don't therapize me and give me a whole breakdown, don't repeat my thoughts with headings. really take all of this, and answer the question as if you're an old homie.
 
             keep it casual, don't say yo, help me make new connections i don't see, comfort, validate, challenge, all of it. dont be afraid to say a lot. format with headings if needed. use new paragrahs to make what you say more readable.
 
@@ -4969,7 +5192,7 @@ struct ContentView: View {
                 "messages": messages,
                 "stream": true
             ]
-            
+
             do {
                 request.httpBody = try JSONSerialization.data(withJSONObject: payload)
             } catch {
@@ -5648,7 +5871,7 @@ struct APIKeysSettingsView: View {
     private func enterEditMode() {
         // Check if keychain access is denied first
         if KeychainHelper.shared.isKeychainAccessDenied(for: .openAI) {
-            print("🔒 enterEditMode: keychain access denied - staying in non-edit mode")
+        print("🔒 enterEditMode: keychain access denied - staying in non-edit mode")
             keychainAccessDenied = true
             return
         }
@@ -5669,12 +5892,12 @@ struct APIKeysSettingsView: View {
         // Save the API key to keychain
         print("🔐 saveAndExitEditMode: tempOpenAIApiKey = '\(tempOpenAIApiKey)'")
         if !tempOpenAIApiKey.isEmpty {
-            print("🔐 Saving to keychain: '\(tempOpenAIApiKey)'")
+        print("🔐 Saving to keychain: '\(tempOpenAIApiKey)'")
             KeychainHelper.shared.saveAPIKey(tempOpenAIApiKey, for: .openAI)
             openAIAPIKey = tempOpenAIApiKey
-            print("🔐 Updated openAIAPIKey to: '\(openAIAPIKey)'")
+        print("🔐 Updated openAIAPIKey to: '\(openAIAPIKey)'")
         } else {
-            print("🔐 Deleting from keychain (empty key)")
+        print("🔐 Deleting from keychain (empty key)")
             KeychainHelper.shared.deleteAPIKey(for: .openAI)
             openAIAPIKey = ""
         }
@@ -5719,25 +5942,25 @@ struct APIKeysSettingsView: View {
         .onAppear {
             // Initialize state based on current mode
             if settingsManager.settings.llmMode == "local" {
-                print("🔍 Configuration view appeared with Local mode active")
+        print("🔍 Configuration view appeared with Local mode active")
                 // Fetch models immediately without waiting for server
                 ollamaManager.fetchLocalModels { models in
-                    print("✅ Local models loaded: \(models)")
+        print("✅ Local models loaded: \(models)")
                 }
                 // Start server in background if needed
                 ollamaManager.checkServerStatus { isRunning in
                     if !isRunning {
                         ollamaManager.startServer { success, error in
                             if success {
-                                print("✅ Server started in background")
+        print("✅ Server started in background")
                             } else {
-                                print("⚠️ Server couldn't start, but models are available: \(error ?? "Unknown error")")
+        print("⚠️ Server couldn't start, but models are available: \(error ?? "Unknown error")")
                             }
                         }
                     }
                 }
             } else {
-                print("🔍 Configuration view appeared with Remote mode active")
+        print("🔍 Configuration view appeared with Remote mode active")
                 // Ensure clean state when in remote mode
                 ollamaManager.resetState()
             }
@@ -5745,26 +5968,26 @@ struct APIKeysSettingsView: View {
         .onChange(of: settingsManager.settings.llmMode) { newMode in
             if newMode == "local" {
                 // Switching TO local mode: fetch models first, then start server
-                print("🔄 Switching to Local mode")
+        print("🔄 Switching to Local mode")
                 
                 // Fetch models immediately
                 ollamaManager.fetchLocalModels { models in
-                    print("✅ Local models loaded: \(models)")
+        print("✅ Local models loaded: \(models)")
                 }
                 
                 // Start server in background (don't wait)
                 DispatchQueue.global(qos: .background).async {
                     ollamaManager.ensureServerRunning { success, error in
                         if success {
-                            print("✅ Server started in background")
+        print("✅ Server started in background")
                         } else {
-                            print("⚠️ Server couldn't start, but models are available: \(error ?? "Unknown error")")
+        print("⚠️ Server couldn't start, but models are available: \(error ?? "Unknown error")")
                         }
                     }
                 }
             } else {
                 // Switching FROM local mode (to remote): stop server and reset state
-                print("🔄 Switching to Remote mode")
+        print("🔄 Switching to Remote mode")
                 ollamaManager.stopServer()
                 ollamaManager.resetState()
             }
@@ -6339,7 +6562,7 @@ struct MarkdownTextView: View {
             
         } catch {
             // If markdown parsing fails, fall back to plain text
-            print("Markdown parsing failed: \(error)")
+        print("Markdown parsing failed: \(error)")
             var fallback = AttributedString(content)
             fallback.font = NSFont(name: font, size: fontSize) ?? NSFont.systemFont(ofSize: fontSize)
             fallback.foregroundColor = colorScheme == .light ? 
