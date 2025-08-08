@@ -3562,9 +3562,9 @@ struct ContentView: View {
             ZStack(alignment: .trailing) {
                 VStack(spacing: 0) {
                     sidebarHeader(textColor: textColor, textHoverColor: textHoverColor)
-                    Divider()
+                    Divider().padding(.horizontal, 12)
                     sidebarEntriesList
-                    Spacer()
+                    // Spacer()
                     sidebarReflectionSection(textColor: textColor, textHoverColor: textHoverColor)
                 }
                 .frame(width: 200)
@@ -3641,8 +3641,9 @@ struct ContentView: View {
                             .id(entry.id)
 
                         // let isHovered = entry.id == hoveredEntryId || entries[index + 1].id == hoveredEntryId
-                        let isSelected = entry.id == selectedEntryId || entries[index + 1].id == selectedEntryId
-                        let isManuallySelected = entry.id == manuallySelectedEntryId || entries[index + 1].id == manuallySelectedEntryId
+                        let nextEntryExists = index + 1 < entries.count
+                        let isSelected = entry.id == selectedEntryId || (nextEntryExists && entries[index + 1].id == selectedEntryId)
+                        let isManuallySelected = entry.id == manuallySelectedEntryId || (nextEntryExists && entries[index + 1].id == manuallySelectedEntryId)
 
                         if index != entries.indices.last {
                             Divider()
@@ -3788,8 +3789,7 @@ struct ContentView: View {
     @ViewBuilder
     private func sidebarReflectionSection(textColor: Color, textHoverColor: Color) -> some View {
         VStack(spacing: 0) {
-            Divider()
-            
+            Divider().padding(.horizontal, 12)
             VStack(spacing: 8) {
                 // First line: "Reflect"
                 HStack {
@@ -4189,14 +4189,13 @@ struct ContentView: View {
         }
         
         let nextIndex = currentIndex + 1
-        let nextEntry: HumanEntry
         
+        // Stop at the bottom instead of wrapping
         if nextIndex >= entries.count {
-            // Wrap to the first entry
-            nextEntry = entries.first!
-        } else {
-            nextEntry = entries[nextIndex]
+            return
         }
+        
+        let nextEntry = entries[nextIndex]
         
         // Update both manual selection and load the entry
         manuallySelectedEntryId = nextEntry.id
@@ -4218,14 +4217,13 @@ struct ContentView: View {
         }
         
         let previousIndex = currentIndex - 1
-        let previousEntry: HumanEntry
         
+        // Stop at the top instead of wrapping
         if previousIndex < 0 {
-            // Wrap to the last entry
-            previousEntry = entries.last!
-        } else {
-            previousEntry = entries[previousIndex]
+            return
         }
+        
+        let previousEntry = entries[previousIndex]
         
         // Update both manual selection and load the entry
         manuallySelectedEntryId = previousEntry.id
