@@ -3684,12 +3684,19 @@ struct ContentView: View {
         print("❌ Could not find section \(section.id) in sections array")
                                                             }
                                                         }) {
-                                                            Image(systemName: "arrow.clockwise")
+                                                            Image(systemName: "arrow.2.circlepath")
                                                                 .font(.system(size: 14))
                                                                 .foregroundColor(.secondary)
                                                         }
                                                         .buttonStyle(PlainButtonStyle())
                                                         .disabled(reloadingReflectionIndex != nil || isStreamingReflection || reflectionViewModel.isLoading)
+                                                        .onHover { hovering in
+                                                            if hovering {
+                                                                NSCursor.pointingHand.push()
+                                                            } else {
+                                                                NSCursor.pop()
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
@@ -3754,7 +3761,9 @@ struct ContentView: View {
             ZStack(alignment: .trailing) {
                 VStack(spacing: 0) {
                     sidebarHeader(textColor: textColor, textHoverColor: textHoverColor)
-                    Divider().padding(.horizontal, 12)
+                    Divider()
+                        .padding(.horizontal, selectedEntryId == entries.first?.id ? 0 : 12)
+                        .opacity(manuallySelectedEntryId == entries.first?.id ? 0 : 1)
                     sidebarEntriesList
                     // Spacer()
                     sidebarReflectionSection(textColor: textColor, textHoverColor: textHoverColor)
