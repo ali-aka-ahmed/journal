@@ -3131,7 +3131,7 @@ struct ContentView: View {
                 }
             }
         }
-        .frame(minWidth: 1100, minHeight: 600)
+        .frame(minWidth: (NSScreen.main?.frame.width ?? 1920) * 0.25, minHeight: (NSScreen.main?.frame.height ?? 1080) * 0.25)
         .animation(.easeInOut(duration: 0.2), value: showingSidebar)
         .preferredColorScheme(colorScheme)
         .onAppear {
