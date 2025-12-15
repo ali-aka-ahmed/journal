@@ -68,7 +68,7 @@ struct HumanEntry: Identifiable {
         return HumanEntry(
             id: id,
             date: displayDate,
-            filename: "[Daily]-[\(dateComponent)]-[\(timeComponent)].md",
+            filename: "[Daily]-[\(dateComponent)]-[\(timeComponent)]-[\(id.uuidString)].md",
             previewText: ""
         )
     }
@@ -1481,8 +1481,11 @@ struct ContentView: View {
         hasInitiatedReflection = true
         isStreamingReflection = true
         
-        // Start reflection with the gathered content
-        reflectionViewModel.start(apiKey: apiKey, entryText: rangeContent, llmMode: settingsManager.settings.llmMode, selectedOllamaModel: settingsManager.settings.selectedOllamaModel) {
+        // Build the LLM input with proper format: current entry + historical entries with dates
+        let formattedInput = buildLLMInputForReflection(currentEntryText: editingText, historicalContent: rangeContent, startDateString: startDateString, endDateString: endDateString, entryCount: entryCount)
+        
+        // Start reflection with the formatted content
+        reflectionViewModel.start(apiKey: apiKey, entryText: formattedInput, llmMode: settingsManager.settings.llmMode, selectedOllamaModel: settingsManager.settings.selectedOllamaModel) {
             // On complete: add new empty USER section, unfreeze editor, and save
         print("➕ Appending new user section. Current sections.count: \(self.sections.count)")
             self.sections.append(EntrySection(type: .user, text: "\n\n"))
@@ -1529,7 +1532,7 @@ struct ContentView: View {
         let toDate = now
         var fromDate: Date
         var type: String
-        
+
         switch timeframe {
         case .week:
             let weekday = calendar.component(.weekday, from: now)
@@ -1542,7 +1545,7 @@ struct ContentView: View {
             fromDate = calendar.date(from: DateComponents(year: year, month: month, day: 1)) ?? now
             type = "This Month"
         }
-        
+
         runDateRangeReflection(fromDate: fromDate, toDate: toDate, type: type)
     }
     
@@ -1817,9 +1820,9 @@ struct ContentView: View {
                 var shouldInclude = false
                 var displayDate = ""
                 
-                // Handle Daily entries: [Daily]-[MM-dd-yyyy]-[HH-mm-ss].md
+                // Handle Daily entries: [Daily]-[MM-dd-yyyy]-[HH-mm-ss]-[UUID].md
                 if filename.hasPrefix("[Daily]-") {
-                    if let dateMatch = filename.range(of: "\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\]", options: .regularExpression) {
+                    if let dateMatch = filename.range(of: "\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\](?:-\\[[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\\])?", options: [.regularExpression, .caseInsensitive]) {
                         let matchString = String(filename[dateMatch])
                         let components = matchString.components(separatedBy: "]-[")
                         
@@ -1844,10 +1847,10 @@ struct ContentView: View {
                         }
                     }
                 }
-                // Handle Weekly entries: [Weekly]-[MM-dd-yyyy]-[MM-dd-yyyy]-[HH-mm-ss].md
+                // Handle Weekly entries: [Weekly]-[MM-dd-yyyy]-[MM-dd-yyyy]-[HH-mm-ss]-[UUID].md
                 else if filename.hasPrefix("[Weekly]-") {
-                    let pattern = "\\[Weekly\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\]"
-                    if let match = filename.range(of: pattern, options: .regularExpression) {
+                    let pattern = "\\[Weekly\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\](?:-\\[[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\\])?"
+                    if let match = filename.range(of: pattern, options: [.regularExpression, .caseInsensitive]) {
                         let matchString = String(filename[match])
                         let components = matchString.components(separatedBy: "]-[")
                         
@@ -1877,10 +1880,10 @@ struct ContentView: View {
                         }
                     }
                 }
-                // Handle Reflection entries: [Reflection]-[timeframeType]-[MM-dd-yyyy]-[MM-dd-yyyy]-[HH-mm-ss].md
+                // Handle Reflection entries: [Reflection]-[timeframeType]-[MM-dd-yyyy]-[MM-dd-yyyy]-[HH-mm-ss]-[UUID].md
                 else if filename.hasPrefix("[Reflection]-") {
-                    let pattern = "\\[Reflection\\]-\\[([^\\]]+)\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\]"
-                    if let match = filename.range(of: pattern, options: .regularExpression) {
+                    let pattern = "\\[Reflection\\]-\\[([^\\]]+)\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\](?:-\\[[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\\])?"
+                    if let match = filename.range(of: pattern, options: [.regularExpression, .caseInsensitive]) {
                         let matchString = String(filename[match])
                         let components = matchString.components(separatedBy: "]-[")
                         
@@ -1911,10 +1914,10 @@ struct ContentView: View {
                         }
                     }
                 }
-                // Handle Question entries: [Question]-[MM-dd-yyyy]-[HH-mm-ss].md
+                // Handle Question entries: [Question]-[MM-dd-yyyy]-[HH-mm-ss]-[UUID].md
                 else if filename.hasPrefix("[Question]-") {
-                    let pattern = "\\[Question\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\]"
-                    if let match = filename.range(of: pattern, options: .regularExpression) {
+                    let pattern = "\\[Question\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\](?:-\\[[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\\])?"
+                    if let match = filename.range(of: pattern, options: [.regularExpression, .caseInsensitive]) {
                         let matchString = String(filename[match])
                         let components = matchString.components(separatedBy: "]-[")
                         
@@ -2003,10 +2006,10 @@ struct ContentView: View {
             for fileURL in mdFiles {
                 let filename = fileURL.lastPathComponent
                 
-                // Handle Daily entries: [Daily]-[MM-dd-yyyy]-[HH-mm-ss].md
+                // Handle Daily entries: [Daily]-[MM-dd-yyyy]-[HH-mm-ss]-[UUID].md
                 if filename.hasPrefix("[Daily]-") {
         print("Checking Daily file: \(filename)")
-                    if let dateMatch = filename.range(of: "\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\]", options: .regularExpression) {
+                    if let dateMatch = filename.range(of: "\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\](?:-\\[[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\\])?", options: [.regularExpression, .caseInsensitive]) {
                         let matchString = String(filename[dateMatch])
                         let components = matchString.components(separatedBy: "]-[")
                         
@@ -2036,11 +2039,11 @@ struct ContentView: View {
         print("No date match found")
                     }
                 }
-                // Handle Weekly entries: [Weekly]-[MM-dd-yyyy]-[MM-dd-yyyy]-[HH-mm-ss].md
+                // Handle Weekly entries: [Weekly]-[MM-dd-yyyy]-[MM-dd-yyyy]-[HH-mm-ss]-[UUID].md
                 else if filename.hasPrefix("[Weekly]-") {
         print("Checking Weekly file: \(filename)")
-                    let pattern = "\\[Weekly\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\]"
-                    if let match = filename.range(of: pattern, options: .regularExpression) {
+                    let pattern = "\\[Weekly\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\](?:-\\[[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\\])?"
+                    if let match = filename.range(of: pattern, options: [.regularExpression, .caseInsensitive]) {
                         let matchString = String(filename[match])
                         let components = matchString.components(separatedBy: "]-[")
                         
@@ -2066,11 +2069,11 @@ struct ContentView: View {
                         }
                     }
                 }
-                // Handle Reflection entries: [Reflection]-[timeframeType]-[MM-dd-yyyy]-[MM-dd-yyyy]-[HH-mm-ss].md
+                // Handle Reflection entries: [Reflection]-[timeframeType]-[MM-dd-yyyy]-[MM-dd-yyyy]-[HH-mm-ss]-[UUID].md
                 else if filename.hasPrefix("[Reflection]-") {
         print("Checking Reflection file: \(filename)")
-                    let pattern = "\\[Reflection\\]-\\[([^\\]]+)\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\]"
-                    if let match = filename.range(of: pattern, options: .regularExpression) {
+                    let pattern = "\\[Reflection\\]-\\[([^\\]]+)\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\](?:-\\[[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\\])?"
+                    if let match = filename.range(of: pattern, options: [.regularExpression, .caseInsensitive]) {
                         let matchString = String(filename[match])
                         let components = matchString.components(separatedBy: "]-[")
                         
@@ -2106,13 +2109,71 @@ struct ContentView: View {
         return entryCount
     }
     
+    // Function to build LLM input for reflection with proper formatting
+    private func buildLLMInputForReflection(currentEntryText: String, historicalContent: String, startDateString: String, endDateString: String, entryCount: Int) -> String {
+        var input = ""
+        
+        // Add metadata line first
+        input += "Read \(entryCount) entries from \(startDateString) - \(endDateString)\n\n"
+        
+        // Add current entry text if present
+        if !currentEntryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            input += currentEntryText.trimmingCharacters(in: .whitespacesAndNewlines)
+            input += "\n\n"
+        }
+        
+        // Add historical entries with date annotations
+        let formattedHistorical = formatHistoricalEntriesWithDates(historicalContent)
+        input += formattedHistorical
+        
+        return input
+    }
+    
+    // Function to format historical entries with YYYY-MM-DD date prefixes
+    private func formatHistoricalEntriesWithDates(_ content: String) -> String {
+        var formattedContent = ""
+        let entries = content.components(separatedBy: "\n\nNEW ENTRY ")
+        
+        for (index, entry) in entries.enumerated() {
+            if index == 0 && entry.isEmpty { continue } // Skip empty first component
+            
+            var entryText = entry
+            var dateString = ""
+            
+            // Extract date from the "NEW ENTRY [date]" format
+            if let dateMatch = entry.range(of: "^[^\\n]+", options: .regularExpression) {
+                dateString = String(entry[dateMatch])
+                entryText = String(entry[dateMatch.upperBound...])
+            }
+            
+            // Convert display date to YYYY-MM-DD format if possible
+            if !dateString.isEmpty {
+                let dateFormatter = DateFormatter()
+                dateFormatter.dateFormat = "MMMM d"
+                
+                if let date = dateFormatter.date(from: dateString) {
+                    dateFormatter.dateFormat = "yyyy-MM-dd"
+                    let formattedDate = dateFormatter.string(from: date)
+                    formattedContent += "\(formattedDate): \(entryText.trimmingCharacters(in: .whitespacesAndNewlines))\n\n"
+                } else {
+                    // Fall back to original format if date parsing fails
+                    formattedContent += "\(dateString): \(entryText.trimmingCharacters(in: .whitespacesAndNewlines))\n\n"
+                }
+            } else {
+                formattedContent += entryText.trimmingCharacters(in: .whitespacesAndNewlines) + "\n\n"
+            }
+        }
+        
+        return formattedContent.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    
     // Function to extract date range from reflection filename
     private func extractDateRangeFromReflectionFilename(_ filename: String) -> (startDate: Date, endDate: Date, timeframeType: String)? {
         guard filename.hasPrefix("[Reflection]-") else { return nil }
         
-        let pattern = "\\[Reflection\\]-\\[([^\\]]+)\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\]"
+        let pattern = "\\[Reflection\\]-\\[([^\\]]+)\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\](?:-\\[[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\\])?"
         
-        guard let match = filename.range(of: pattern, options: .regularExpression) else {
+        guard let match = filename.range(of: pattern, options: [.regularExpression, .caseInsensitive]) else {
         print("Failed to match reflection filename pattern: \(filename)")
             return nil
         }
@@ -2156,7 +2217,7 @@ struct ContentView: View {
         dateFormatter.dateFormat = "HH-mm-ss"
         let timeString = dateFormatter.string(from: now)
         
-        let filename = "[Reflection]-[\(timeframeType)]-[\(startDateString)]-[\(endDateString)]-[\(timeString)].md"
+        let filename = "[Reflection]-[\(timeframeType)]-[\(startDateString)]-[\(endDateString)]-[\(timeString)]-[\(id.uuidString)].md"
         
         // Create date range for sidebar display (like "Week: Jul 11 - Jul 18")
         dateFormatter.dateFormat = "MMM d"
@@ -2188,7 +2249,7 @@ struct ContentView: View {
         dateFormatter.dateFormat = "HH-mm-ss"
         let timeString = dateFormatter.string(from: now)
         
-        let filename = "[Question]-[\(dateString)]-[\(timeString)].md"
+        let filename = "[Question]-[\(dateString)]-[\(timeString)]-[\(id.uuidString)].md"
         
         // Create display date for sidebar
         dateFormatter.dateFormat = "MMM d"
@@ -2219,7 +2280,7 @@ struct ContentView: View {
         dateFormatter.dateFormat = "HH-mm-ss"
         let timeString = dateFormatter.string(from: now)
         
-        let filename = "[Weekly]-[\(startDateString)]-[\(endDateString)]-[\(timeString)].md"
+        let filename = "[Weekly]-[\(startDateString)]-[\(endDateString)]-[\(timeString)]-[\(id.uuidString)].md"
         
         // For display date
         dateFormatter.dateFormat = "MMM d"
@@ -2261,9 +2322,9 @@ struct ContentView: View {
                 var displayDate: String = ""
                 let uuid = UUID() // Generate new UUID for each entry
                 
-                // Handle Daily entries: [Daily]-[MM-dd-yyyy]-[HH-mm-ss].md
+                // Handle Daily entries: [Daily]-[MM-dd-yyyy]-[HH-mm-ss]-[UUID].md
                 if filename.hasPrefix("[Daily]-") {
-                    if let dateMatch = filename.range(of: "\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\]", options: .regularExpression) {
+                    if let dateMatch = filename.range(of: "\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\](?:-\\[[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\\])?", options: [.regularExpression, .caseInsensitive]) {
                         let matchString = String(filename[dateMatch])
                         let components = matchString.components(separatedBy: "]-[")
                         
@@ -2283,10 +2344,10 @@ struct ContentView: View {
                         }
                     }
                 }
-                // Handle Weekly entries: [Weekly]-[MM-dd-yyyy]-[MM-dd-yyyy]-[HH-mm-ss].md
+                // Handle Weekly entries: [Weekly]-[MM-dd-yyyy]-[MM-dd-yyyy]-[HH-mm-ss]-[UUID].md
                 else if filename.hasPrefix("[Weekly]-") {
-                    let pattern = "\\[Weekly\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\]"
-                    if let match = filename.range(of: pattern, options: .regularExpression) {
+                    let pattern = "\\[Weekly\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\](?:-\\[[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\\])?"
+                    if let match = filename.range(of: pattern, options: [.regularExpression, .caseInsensitive]) {
                         let matchString = String(filename[match])
                         let components = matchString.components(separatedBy: "]-[")
                         
@@ -2314,10 +2375,10 @@ struct ContentView: View {
                         }
                     }
                 }
-                // Handle Reflection entries: [Reflection]-[timeframeType]-[MM-dd-yyyy]-[MM-dd-yyyy]-[HH-mm-ss].md
+                // Handle Reflection entries: [Reflection]-[timeframeType]-[MM-dd-yyyy]-[MM-dd-yyyy]-[HH-mm-ss]-[UUID].md
                 else if filename.hasPrefix("[Reflection]-") {
-                    let pattern = "\\[Reflection\\]-\\[([^\\]]+)\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\]"
-                    if let match = filename.range(of: pattern, options: .regularExpression) {
+                    let pattern = "\\[Reflection\\]-\\[([^\\]]+)\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\](?:-\\[[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\\])?"
+                    if let match = filename.range(of: pattern, options: [.regularExpression, .caseInsensitive]) {
                         let matchString = String(filename[match])
                         let components = matchString.components(separatedBy: "]-[")
                         
@@ -2346,10 +2407,10 @@ struct ContentView: View {
                         }
                     }
                 }
-                // Handle Question entries: [Question]-[MM-dd-yyyy]-[HH-mm-ss].md
+                // Handle Question entries: [Question]-[MM-dd-yyyy]-[HH-mm-ss]-[UUID].md
                 else if filename.hasPrefix("[Question]-") {
-                    let pattern = "\\[Question\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\]"
-                    if let match = filename.range(of: pattern, options: .regularExpression) {
+                    let pattern = "\\[Question\\]-\\[(\\d{2}-\\d{2}-\\d{4})\\]-\\[(\\d{2}-\\d{2}-\\d{2})\\](?:-\\[[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\\])?"
+                    if let match = filename.range(of: pattern, options: [.regularExpression, .caseInsensitive]) {
                         let matchString = String(filename[match])
                         let components = matchString.components(separatedBy: "]-[")
                         
@@ -2515,7 +2576,6 @@ struct ContentView: View {
             createNewEntry()
         }
     }
-    
 
     
     var timerButtonTitle: String {
@@ -2912,7 +2972,7 @@ struct ContentView: View {
                                     NSCursor.pop()
                                 }
                             }
-                            
+
                             Text("•")
                                 .foregroundColor(.gray)
                         }
@@ -3469,10 +3529,10 @@ struct ContentView: View {
                 // Handle arrow keys for entry navigation when an entry is manually selected
                 if manuallySelectedEntryId != nil && !showingCommandBar {
                     if event.keyCode == 125 { // Down arrow
-                        navigateToNextEntry()
+                        navigateEntry(direction: 1)
                         return nil // Consume the event
                     } else if event.keyCode == 126 { // Up arrow
-                        navigateToPreviousEntry()
+                        navigateEntry(direction: -1)
                         return nil // Consume the event
                     }
                 }
@@ -3594,6 +3654,7 @@ struct ContentView: View {
                     .textSelection(.enabled)
                     .disabled(reflectionViewModel.isLoading || isStreamingReflection)
                     .focused($isUserEditorFocused)
+                    .id(selectedEntryId)
                     .onChange(of: editingText) { _ in
                     }
                     .overlay(
@@ -3879,19 +3940,22 @@ struct ContentView: View {
     @ViewBuilder
     private func sidebarEntryRow(entry: HumanEntry) -> some View {
         Button(action: {
-            // Set manual selection when entry is clicked
-            manuallySelectedEntryId = entry.id
-            
-            if !isStreamingReflection && selectedEntryId != entry.id {
-                // Save current entry before switching
+            if !isStreamingReflection {
+                // Save the entry we're currently editing BEFORE updating any state
+                // This ensures global state (sections, editingText) remains consistent during save
                 if let currentId = selectedEntryId,
                    let currentEntry = entries.first(where: { $0.id == currentId }) {
                     saveEntry(entry: currentEntry)
                     updatePreviewText(for: currentEntry)
                 }
                 
+                // Now update all state to point to the clicked entry
+                manuallySelectedEntryId = entry.id
                 selectedEntryId = entry.id
-                loadEntry(entry: entry)
+                loadEntry(entry: entry)  // Load new content after saving old
+            } else {
+                // Just update manual selection if streaming
+                manuallySelectedEntryId = entry.id
             }
         }) {
             HStack(alignment: .top) {
@@ -4000,7 +4064,7 @@ struct ContentView: View {
                         .padding(.top, 8)
                     Spacer()
                 }
-                
+
                 // Second line: "Week Month Custom"
                 HStack(spacing: 4) {
                     Button("Week") {
@@ -4017,11 +4081,11 @@ struct ContentView: View {
                             NSCursor.pop()
                         }
                     }
-                    
+
                     Text("•")
                         .foregroundColor(.gray)
                         .font(.system(size: 13))
-                    
+
                     Button("Month") {
                         startReflection(timeframe: .month)
                     }
@@ -4036,11 +4100,11 @@ struct ContentView: View {
                             NSCursor.pop()
                         }
                     }
-                    
+
                     Text("•")
                         .foregroundColor(.gray)
                         .font(.system(size: 13))
-                    
+
                     Button("Custom") {
                         withAnimation(.easeInOut(duration: 0.2)) {
                             showingSettings = true
@@ -4058,20 +4122,20 @@ struct ContentView: View {
                             NSCursor.pop()
                         }
                     }
-                    
+
                     Spacer()
                 }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 6)
-            
+
             // Bottom spacer for alignment with navbar
             Rectangle()
                 .fill(Color.clear)
                 .frame(height: 16) // Increased to push content up higher
         }
     }
-    
+
     private func backgroundColor(for entry: HumanEntry) -> Color {
         if entry.id == manuallySelectedEntryId {
             return Color(red: 0.8863, green: 0.8471, blue: 0.8078)
@@ -4247,7 +4311,6 @@ struct ContentView: View {
     
     private func loadEntry(entry: HumanEntry) {
         print("📂 loadEntry called for: \(entry.filename)")
-        print("   Entry ID: \(entry.id.uuidString)")
         print("   Current sections.count before reset: \(sections.count)")
         
         let documentsDirectory = getDocumentsDirectory()
@@ -4309,7 +4372,7 @@ struct ContentView: View {
                     
         print("   ✅ Finished loading entry, sections.count: \(sections.count)")
                     for (idx, section) in sections.enumerated() {
-        print("   Section \(idx): \(section.type) - ID: \(section.id.uuidString)")
+        print("   Section \(idx): \(section.type)")
                     }
                     
                     // Find the latest USER section for editing (must be the last section)
@@ -4350,6 +4413,7 @@ struct ContentView: View {
         let newEntry = HumanEntry.createNew()
         entries.insert(newEntry, at: 0) // Add to the beginning
         selectedEntryId = newEntry.id
+        manuallySelectedEntryId = newEntry.id
 
         // Reset all reflection-related state for a clean slate
         reflectionViewModel.reflectionResponse = ""
@@ -4396,78 +4460,51 @@ struct ContentView: View {
         }
     }
     
-    private func navigateToNextEntry() {
-        print("⬇️ navigateToNextEntry called")
+    private func navigateEntry(direction: Int) {
+        let directionSymbol = direction > 0 ? "⬇️" : "⬆️"
+        let directionText = direction > 0 ? "next" : "previous"
+        
+        print("\(directionSymbol) navigateEntry called (direction: \(directionText))")
         print("   entries.count: \(entries.count)")
-        print("   manuallySelectedEntryId: \(manuallySelectedEntryId?.uuidString ?? "nil")")
-        print("   selectedEntryId: \(selectedEntryId?.uuidString ?? "nil")")
+        let manuallySelectedFilename = manuallySelectedEntryId != nil ? entries.first(where: { $0.id == manuallySelectedEntryId })?.filename ?? "unknown" : "nil"
+        let selectedFilename = selectedEntryId != nil ? entries.first(where: { $0.id == selectedEntryId })?.filename ?? "unknown" : "nil"
+        print("   manuallySelectedEntry: \(manuallySelectedFilename)")
+        print("   selectedEntry: \(selectedFilename)")
         
         guard let currentId = manuallySelectedEntryId,
               let currentIndex = entries.firstIndex(where: { $0.id == currentId }) else {
-        print("   ❌ No current entry found or invalid index")
+            print("   ❌ No current entry found or invalid index")
             return
         }
         
         print("   Current entry index: \(currentIndex)")
         print("   Current entry filename: \(entries[currentIndex].filename)")
         
-        let nextIndex = currentIndex + 1
+        let targetIndex = currentIndex + direction
         
-        // Stop at the bottom instead of wrapping
-        if nextIndex >= entries.count {
+        // Boundary checks
+        if targetIndex < 0 || targetIndex >= entries.count {
+            print("   ⚠️ Reached boundary, cannot navigate \(directionText)")
             return
         }
         
-        let nextEntry = entries[nextIndex]
+        // Get references BEFORE updating any state
+        let currentEntry = entries[currentIndex]  // Entry we're leaving (user was editing this)
+        let targetEntry = entries[targetIndex]    // Entry we're navigating to
         
-        // Update both manual selection and load the entry
-        manuallySelectedEntryId = nextEntry.id
+        print("   Target entry index: \(targetIndex)")
+        print("   Target entry filename: \(targetEntry.filename)")
         
-        // Save current entry before switching
-        if let currentEntry = entries.first(where: { $0.id == selectedEntryId }) {
-            saveEntry(entry: currentEntry)
-            updatePreviewText(for: currentEntry)
-        }
+        // Save the entry we're leaving (using the entry from manuallySelectedEntryId context)
+        saveEntry(entry: currentEntry)
+        updatePreviewText(for: currentEntry)
         
-        selectedEntryId = nextEntry.id
-        loadEntry(entry: nextEntry)
-    }
-    
-    private func navigateToPreviousEntry() {
-        print("⬆️ navigateToPreviousEntry called")
-        print("   entries.count: \(entries.count)")
-        print("   manuallySelectedEntryId: \(manuallySelectedEntryId?.uuidString ?? "nil")")
-        print("   selectedEntryId: \(selectedEntryId?.uuidString ?? "nil")")
+        // Update state to point to new entry
+        manuallySelectedEntryId = targetEntry.id
+        selectedEntryId = targetEntry.id
         
-        guard let currentId = manuallySelectedEntryId,
-              let currentIndex = entries.firstIndex(where: { $0.id == currentId }) else {
-        print("   ❌ No current entry found or invalid index")
-            return
-        }
-        
-        print("   Current entry index: \(currentIndex)")
-        print("   Current entry filename: \(entries[currentIndex].filename)")
-        
-        let previousIndex = currentIndex - 1
-        
-        // Stop at the top instead of wrapping
-        if previousIndex < 0 {
-            return
-        }
-        
-        let previousEntry = entries[previousIndex]
-        
-        // Update both manual selection and load the entry
-        manuallySelectedEntryId = previousEntry.id
-        
-        // Save current entry before switching
-        if let currentEntry = entries.first(where: { $0.id == selectedEntryId }) {
-            saveEntry(entry: currentEntry)
-            updatePreviewText(for: currentEntry)
-        }
-        
-        selectedEntryId = previousEntry.id
-        loadEntry(entry: previousEntry)
+        // Load the entry we're navigating to
+        loadEntry(entry: targetEntry)
     }
     
     private func deleteEntry(entry: HumanEntry) {
@@ -4487,10 +4524,14 @@ struct ContentView: View {
                 if selectedEntryId == entry.id {
                     if let firstEntry = entries.first {
                         selectedEntryId = firstEntry.id
+                        manuallySelectedEntryId = firstEntry.id
                         loadEntry(entry: firstEntry)
                     } else {
                         createNewEntry()
                     }
+                } else {
+                    // If we deleted a different entry, sync manual selection with current selection
+                    manuallySelectedEntryId = selectedEntryId
                 }
             }
         } catch {
