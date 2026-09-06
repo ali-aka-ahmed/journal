@@ -1,3 +1,5 @@
+> **this project is deprecated, freewrite itself has advanced and is much better. but was a cool stub that I tried out! thanks for checking out. [download freewrite directly](https://www.freewrite.io/)**
+
 # hi, this is Journal ✍️
 
 a simple, open-source mac app for journaling. remixed from [freewrite](https://www.freewrite.io/) by [farza](https://x.com/FarzaTV).
